@@ -185,11 +185,12 @@ typedef struct SDL_UserEvent
     void *data2;
 } SDL_UserEvent;
 
+struct SDL_SysWMmsg;
 typedef struct SDL_SysWMmsg SDL_SysWMmsg;
 typedef struct SDL_SysWMEvent
 {
     Uint8 type;
-    SDL_SysWMmsg *msg;
+    struct SDL_SysWMmsg *msg;
 } SDL_SysWMEvent;
 
 typedef union SDL_Event

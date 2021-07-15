@@ -36,7 +36,13 @@
 
 #include <stdarg.h>
 #include <limits.h>
-#ifndef _WIN32
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#include <windows.h>
+#else
 #include <stdio.h> /* fprintf(), etc. */
 #include <stdlib.h>    /* for abort() */
 #include <string.h>
@@ -57,17 +63,28 @@
 extern "C" {
 #endif
 
-#if 0
-#define FIXME(x) do {} while (0)
+#define ENABLE_FIXMES 1
+#if ENABLE_FIXMES == -1  /* don't even allow a build to finish if there's a FIXME */
+    /* the goal with this nonsense is to make the compiler print an error that
+       broadcasts the problem _and the string literal_ from the actual FIXME line */
+    extern void YouCannotBuildUntilYouResolveThisFixme(char *x);
+    #define FIXME(x) YouCannotBuildUntilYouResolveThisFixme(-->)
+#elif ENABLE_FIXMES == 0  /* compile out any FIXMEs entirely. */
+    #define FIXME(x) do {} while (0)
+#elif ENABLE_FIXMES == 1  /* Log a warning the first time a FIXME is executed. */
+    static SDL_bool PrintFixmes = SDL_TRUE;
+    #define FIXME(x) \
+        do { \
+            if (PrintFixmes) { \
+                static SDL_bool seen = SDL_FALSE; \
+                if (!seen) { \
+                    SDL20_Log("FIXME: %s (%s:%d)\n", x, __FUNCTION__, __LINE__); \
+                    seen = SDL_TRUE; \
+                } \
+            } \
+        } while (0)
 #else
-#define FIXME(x) \
-    do { \
-        static SDL_bool seen = SDL_FALSE; \
-        if (!seen) { \
-            SDL20_Log("FIXME: %s (%s:%d)\n", x, __FUNCTION__, __LINE__); \
-            seen = SDL_TRUE; \
-        } \
-    } while (0)
+    #error Please fix the ENABLE_FIXMES define.
 #endif
 
 #define SDL20_SYM(rc,fn,params,args,ret) \
@@ -555,6 +572,54 @@ typedef struct SDL12_keysym
 #define SDL12_RELEASED 0
 #define SDL12_PRESSED  1
 
+#if defined(SDL_VIDEO_DRIVER_X11)  /* SDL_VIDEO_DRIVER_X11 refers to the SDL2 headers. */
+typedef enum SDL_SYSWM_TYPE  /* this is only used for 1.2 X11 syswm */
+{
+    SDL12_SYSWM_X11
+} SDL12_SYSWM_TYPE;
+#endif
+
+typedef struct SDL12_SysWMmsg
+{
+    SDL_version version;
+#if defined(_WIN32)
+    HWND hwnd;
+    UINT msg;
+    WPARAM wParam;
+    LPARAM lParam;
+#elif defined(SDL_VIDEO_DRIVER_X11)
+    SDL12_SYSWM_TYPE subsystem;
+    union { XEvent xevent; } event;
+#else
+    int data;  /* unused at the moment. */
+#endif
+} SDL12_SysWMmsg;
+
+typedef struct SDL12_SysWMinfo
+{
+    SDL_version version;
+#if defined(_WIN32)
+    HWND window;
+    HGLRC hglrc;
+#elif defined(SDL_VIDEO_DRIVER_X11)
+    SDL12_SYSWM_TYPE subsystem;
+    union {
+        struct {
+            Display *display;
+            Window window;
+            void (*lock_func)(void);
+            void (*unlock_func)(void);
+            Window fswindow;
+            Window wmwindow;
+            Display *gfxdisplay;
+        } x11;
+    } info;
+#else
+    int data;  /* unused at the moment. */
+#endif
+} SDL12_SysWMinfo;
+
+
 typedef enum
 {
     SDL12_NOEVENT = 0,
@@ -679,7 +744,7 @@ typedef struct
 typedef struct
 {
     Uint8 type;
-    void *msg;
+    SDL12_SysWMmsg *msg;
 } SDL12_SysWMEvent;
 
 typedef union
@@ -747,6 +812,34 @@ typedef enum
 } SDL12_GLattr;
 
 
+typedef enum
+{
+    SDL12_CD_TRAYEMPTY,
+    SDL12_CD_STOPPED,
+    SDL12_CD_PLAYING,
+    SDL12_CD_PAUSED,
+    SDL12_CD_ERROR = -1
+} SDL12_CDstatus;
+
+typedef struct
+{
+    Uint8 id;
+    Uint8 type;
+    Uint16 unused;
+    Uint32 length;
+    Uint32 offset;
+} SDL12_CDtrack;
+
+typedef struct
+{
+    int id;
+    SDL12_CDstatus status;
+    int numtracks;
+    int cur_track;
+    int cur_frame;
+    SDL12_CDtrack track[100];  /* in 1.2, this was SDL_MAX_TRACKS+1 */
+} SDL12_CD;
+
 typedef struct
 {
     Uint32 format;
@@ -760,6 +853,23 @@ typedef struct
     int device_index;
     SDL_Joystick *joystick;
 } JoystickOpenedItem;
+
+/* this is identical to SDL2, except SDL2 forced the structure packing in
+   some instances, so we can't passthrough without converting the struct. :( */
+typedef struct
+{
+    int needed;
+    Uint16 src_format;
+    Uint16 dst_format;
+    double rate_incr;
+    Uint8 *buf;
+    int len;
+    int len_cvt;
+    int len_mult;
+    double len_ratio;
+    void (SDLCALL *filters[10])(struct SDL_AudioCVT *cvt, Uint16 format);
+    int filter_index;
+} SDL12_AudioCVT;
 
 #include "SDL_opengl.h"
 #include "SDL_opengl_glext.h"
@@ -781,6 +891,8 @@ typedef struct OpenGLEntryPoints
 
 /* !!! FIXME: grep for VideoWindow20 places that might care if it's NULL */
 /* !!! FIXME: go through all of these. */
+static Uint32 LinkedSDL2VersionInt = 0;
+static SDL_bool IsDummyVideo = SDL_FALSE;
 static VideoModeList *VideoModes = NULL;
 static int VideoModesCount = 0;  /* this counts items in VideoModeList, not total video modes. */
 static SDL12_VideoInfo VideoInfo12;
@@ -805,7 +917,10 @@ static char *WindowIconTitle = NULL;
 static SDL_Surface *VideoIcon20 = NULL;
 static int EnabledUnicode = 0;
 static int VideoDisplayIndex = 0;
-static int CDRomInit = 0;
+static SDL_bool SupportSysWM = SDL_FALSE;
+static SDL_bool CDRomInit = SDL_FALSE;
+static char *CDRomPath = NULL;
+static SDL12_CD *CDRomDevice = NULL;
 static SDL12_EventFilter EventFilter12 = NULL;
 static SDL12_Cursor *CurrentCursor12 = NULL;
 static Uint8 EventStates[SDL12_NUMEVENTS];
@@ -815,6 +930,8 @@ static Uint8 KeyState[SDLK12_LAST];
 static SDL_bool MouseInputIsRelative = SDL_FALSE;
 static SDL_Point MousePosition = { 0, 0 };
 static OpenGLEntryPoints OpenGLFuncs;
+static int OpenGLBlitLockCount = 0;
+static GLuint OpenGLBlitTexture = 0;
 static int OpenGLLogicalScalingWidth = 0;
 static int OpenGLLogicalScalingHeight = 0;
 static GLuint OpenGLLogicalScalingFBO = 0;
@@ -827,11 +944,11 @@ static GLuint OpenGLLogicalScalingMultisampleDepth = 0;
 static GLuint OpenGLCurrentReadFBO = 0;
 static GLuint OpenGLCurrentDrawFBO = 0;
 
-
 /* !!! FIXME: need a mutex for the event queue. */
 #define SDL12_MAXEVENTS 128
 typedef struct EventQueueType
 {
+    SDL12_SysWMmsg syswm_msg;  /* save space for a copy of this in case we use it. */
     SDL12_Event event12;
     struct EventQueueType *next;
 } EventQueueType;
@@ -847,10 +964,7 @@ static SDL12_Event PendingKeydownEvent;
 /* Obviously we can't use SDL_LoadObject() to load SDL2.  :)  */
 static char loaderror[256];
 #if defined(_WIN32)
-    #ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN 1
-    #endif
-    #include <windows.h>
+    #define DIRSEP "\\"
     #define SDL20_LIBNAME "SDL2.dll"
     /* require SDL2 >= 2.0.12 for SDL_CreateThread binary compatibility */
     #define SDL20_REQUIRED_VER SDL_VERSIONNUM(2,0,12)
@@ -862,6 +976,7 @@ static char loaderror[256];
     #define sprintf_fn wsprintfA
 #elif defined(__OS2__)
     #include <os2.h>
+    #define DIRSEP "\\"
     #define SDL20_LIBNAME "SDL2.dll"
     #define SDL20_REQUIRED_VER SDL_VERSIONNUM(2,0,9)
     #define strcpy_fn  strcpy
@@ -953,6 +1068,10 @@ static char loaderror[256];
     #error Please define your platform.
 #endif
 
+#ifndef DIRSEP
+#define DIRSEP "/"
+#endif
+
 static void *
 LoadSDL20Symbol(const char *fn, int *okay)
 {
@@ -989,15 +1108,23 @@ LoadSDL20(void)
             if (okay) {
                 SDL_version v;
                 SDL20_GetVersion(&v);
-                okay = (SDL_VERSIONNUM(v.major,v.minor,v.patch) >= SDL20_REQUIRED_VER);
+                LinkedSDL2VersionInt = SDL_VERSIONNUM(v.major, v.minor, v.patch);
+                okay = (LinkedSDL2VersionInt >= SDL20_REQUIRED_VER);
                 if (!okay) {
                     sprintf_fn(loaderror, "SDL2 %d.%d.%d library is too old.", v.major, v.minor, v.patch);
                 } else {
-                    #if defined(__DATE__) && defined(__TIME__)
-                    SDL20_Log("sdl12-compat, built on " __DATE__ " at " __TIME__ ", talking to SDL2 %d.%d.%d", v.major, v.minor, v.patch);
-                    #else
-                    SDL20_Log("sdl12-compat, talking to SDL2 %d.%d.%d", v.major, v.minor, v.patch);
+                    const char *envr = SDL20_getenv("SDL12_COMPAT_DEBUG_LOGGING");
+                    const SDL_bool debug_logging = (!envr || (SDL20_atoi(envr) == 0)) ? SDL_FALSE : SDL_TRUE;
+                    #if ENABLE_FIXMES == 1
+                    PrintFixmes = debug_logging;
                     #endif
+                    if (debug_logging) {
+                        #if defined(__DATE__) && defined(__TIME__)
+                        SDL20_Log("sdl12-compat, built on " __DATE__ " at " __TIME__ ", talking to SDL2 %d.%d.%d", v.major, v.minor, v.patch);
+                        #else
+                        SDL20_Log("sdl12-compat, talking to SDL2 %d.%d.%d", v.major, v.minor, v.patch);
+                        #endif
+                    }
                 }
             }
             if (!okay) {
@@ -1115,6 +1242,7 @@ SDL_UnregisterApp(void)
 {
 }
 #endif
+
 
 DECLSPEC const SDL_version * SDLCALL
 SDL_Linked_Version(void)
@@ -1338,18 +1466,35 @@ PixelFormat12to20(SDL_PixelFormat *format20, SDL_Palette *palette20, const SDL12
     format20->format = SDL20_MasksToPixelFormatEnum(format12->BitsPerPixel, format12->Rmask, format12->Gmask, format12->Bmask, format12->Amask);
     format20->BitsPerPixel = format12->BitsPerPixel;
     format20->BytesPerPixel = format12->BytesPerPixel;
-    format20->Rmask = format12->Rmask;
-    format20->Gmask = format12->Gmask;
-    format20->Bmask = format12->Bmask;
-    format20->Amask = format12->Amask;
-    format20->Rloss = format12->Rloss;
-    format20->Gloss = format12->Gloss;
-    format20->Bloss = format12->Bloss;
-    format20->Aloss = format12->Aloss;
-    format20->Rshift = format12->Rshift;
-    format20->Gshift = format12->Gshift;
-    format20->Bshift = format12->Bshift;
-    format20->Ashift = format12->Ashift;
+
+    /* Paletted surfaces shouldn't have masks in SDL 2.0 */
+    if (format12->palette) {
+        format20->Rmask = 0;
+        format20->Gmask = 0;
+        format20->Bmask = 0;
+        format20->Amask = 0;
+        format20->Rloss = 8;
+        format20->Gloss = 8;
+        format20->Bloss = 8;
+        format20->Aloss = 8;
+        format20->Rshift = 0;
+        format20->Gshift = 0;
+        format20->Bshift = 0;
+        format20->Ashift = 0;
+    } else {
+        format20->Rmask = format12->Rmask;
+        format20->Gmask = format12->Gmask;
+        format20->Bmask = format12->Bmask;
+        format20->Amask = format12->Amask;
+        format20->Rloss = format12->Rloss;
+        format20->Gloss = format12->Gloss;
+        format20->Bloss = format12->Bloss;
+        format20->Aloss = format12->Aloss;
+        format20->Rshift = format12->Rshift;
+        format20->Gshift = format12->Gshift;
+        format20->Bshift = format12->Bshift;
+        format20->Ashift = format12->Ashift;
+    }
     format20->refcount = 1;
     format20->next = NULL;
     return format20;
@@ -1400,6 +1545,58 @@ GetVideoDisplay(void)
     }
 }
 
+/* returns true if mode1 should sort before mode2 */
+static int
+VidModeSizeGreater(SDL12_Rect *mode1, SDL12_Rect *mode2)
+{
+    if (mode1->w > mode2->w) {
+        return 1;
+    } else if (mode2->w > mode1->w) {
+        return 0;
+    } else {
+        return (mode1->h > mode2->h);
+    }
+}
+
+static int
+AddVidModeToList(VideoModeList *vmode, SDL12_Rect *mode)
+{
+    void *ptr = NULL;
+    int i;
+
+    /* make sure we don't have this one already (with a different refresh rate, etc). */
+    for (i = 0; i < vmode->nummodes; i++) {
+        if ((vmode->modeslist12[i].w == mode->w) && (vmode->modeslist12[i].h == mode->h)) {
+            break;
+        }
+    }
+
+    if (i < vmode->nummodes) {
+        return 0;  /* already have this one. */
+    }
+
+    ptr = SDL20_realloc(vmode->modeslist12, sizeof (SDL12_Rect) * (vmode->nummodes + 1));
+    if (ptr == NULL) {
+        return SDL20_OutOfMemory();
+    }
+    vmode->modeslist12 = (SDL12_Rect *) ptr;
+
+    vmode->modeslist12[vmode->nummodes] = *mode;
+
+    vmode->nummodes++;
+
+    return 0;
+}
+
+/* A list of fake video modes which are included. */
+static SDL12_Rect fake_modes[] = {
+    { 0, 0, 1920, 1080 },
+    { 0, 0, 1280, 720 },
+    { 0, 0, 1024, 768 },
+    { 0, 0, 800, 600 },
+    { 0, 0, 640, 480 }
+};
+
 /* This sets up VideoModes and VideoModesCount. You end up with arrays by pixel
     format, each with a value that 1.2's SDL_ListModes() can return. */
 static int
@@ -1409,6 +1606,10 @@ Init12VidModes(void)
     VideoModeList *vmode = NULL;
     void *ptr = NULL;
     int i, j;
+    SDL12_Rect prev_mode = { 0, 0, 0, 0 }, current_mode = { 0, 0, 0, 0 };
+    /* We only want to enable fake modes if OpenGL Logical Scaling is enabled. */
+    char *env = SDL20_getenv("SDL12COMPAT_OPENGL_SCALING");
+    SDL_bool use_fake_modes = (!env || SDL20_atoi(env)) ? SDL_TRUE : SDL_FALSE;
 
     if (VideoModesCount > 0) {
         return 0;  /* already did this. */
@@ -1422,10 +1623,20 @@ Init12VidModes(void)
         if (SDL20_GetDisplayMode(VideoDisplayIndex, i, &mode) < 0) {
             continue;
         }
-        if (!mode.w || !mode.h) {
-            SDL_assert(0 && "Can this actually happen?");
-            continue;
+
+        if ((mode.w == 0) && (mode.h == 0)) {
+            /* SDL2 has a bug in its dummy driver before 2.0.16 that causes it to report a bogus video mode. */
+            if (IsDummyVideo && (LinkedSDL2VersionInt <= SDL_VERSIONNUM(2, 0, 15))) {
+                mode.w = 1024;
+                mode.h = 768;
+                mode.format = SDL_PIXELFORMAT_RGB888;
+            }
         }
+
+        if ((mode.w <= 0) || (mode.h <= 0)) {
+            continue;  /* bogus mode for whatever reason, ignore it. */
+        }
+
         if (mode.w > 65535 || mode.h > 65535) {
             continue;  /* can't fit to 16-bits for SDL12_Rect */
         }
@@ -1444,29 +1655,37 @@ Init12VidModes(void)
             VideoModesCount++;
         }
 
-        /* make sure we don't have this one already (with a different refresh rate, etc). */
-        for (j = 0; j < vmode->nummodes; j++) {
-            if ((vmode->modeslist12[j].w == mode.w) && (vmode->modeslist12[j].h == mode.h)) {
-                break;
+        current_mode.w = mode.w;
+        current_mode.h = mode.h;
+
+        /* Attempt to add all of the fake modes. */
+        if (use_fake_modes) {
+            for (j = 0; j < SDL_arraysize(fake_modes); ++j) {
+                if (VidModeSizeGreater(&prev_mode, &fake_modes[j]) && VidModeSizeGreater(&fake_modes[j], &current_mode)) {
+                    if (AddVidModeToList(vmode, &fake_modes[j])) {
+                        return SDL20_OutOfMemory();
+                    }
+                }
             }
         }
 
-        if (j < vmode->nummodes) {
-            continue;  /* already have this one. */
-        }
-
-        ptr = SDL20_realloc(vmode->modeslist12, sizeof (SDL12_Rect) * (vmode->nummodes + 1));
-        if (ptr == NULL) {
+        if (AddVidModeToList(vmode, &current_mode)) {
             return SDL20_OutOfMemory();
         }
-        vmode->modeslist12 = (SDL12_Rect *) ptr;
 
-        vmode->modeslist12[vmode->nummodes].x = 0;
-        vmode->modeslist12[vmode->nummodes].y = 0;
-        vmode->modeslist12[vmode->nummodes].w = mode.w;
-        vmode->modeslist12[vmode->nummodes].h = mode.h;
+        prev_mode.w = mode.w;
+        prev_mode.h = mode.h;
+    }
 
-        vmode->nummodes++;
+    /* we need to try to add fake modes to the end of the list once there are no more real modes */
+    if (use_fake_modes) {
+        for (i = 0; i < SDL_arraysize(fake_modes); ++i) {
+            if (VidModeSizeGreater(&prev_mode, &fake_modes[i])) {
+                if (AddVidModeToList(vmode, &fake_modes[i])) {
+                    return SDL20_OutOfMemory();
+                }
+            }
+        }
     }
 
     /* link up modes12 for SDL_ListModes()'s use... */
@@ -1487,8 +1706,11 @@ Init12VidModes(void)
 static int
 Init12Video(void)
 {
+    const char *driver = SDL20_GetCurrentVideoDriver();
     SDL_DisplayMode mode;
     int i;
+
+    IsDummyVideo = ((driver != NULL) && (SDL20_strcmp(driver, "dummy") == 0)) ? SDL_TRUE : SDL_FALSE;
 
     for (i = 0; i < SDL12_MAXEVENTS-1; i++)
         EventQueuePool[i].next = &EventQueuePool[i+1];
@@ -1500,8 +1722,19 @@ Init12Video(void)
     SDL20_memset(&PendingKeydownEvent, 0, sizeof(SDL12_Event));
 
     SDL20_memset(EventStates, SDL_ENABLE, sizeof (EventStates)); /* on by default */
-    EventStates[SDL12_SYSWMEVENT] = SDL_IGNORE;  /* off by default. */
 
+    EventStates[SDL12_SYSWMEVENT] = SDL_IGNORE;  /* off by default. */
+    SDL20_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
+
+#if defined(SDL_VIDEO_DRIVER_WINDOWS)
+    SupportSysWM = (SDL20_strcmp(driver, "windows") == 0) ? SDL_TRUE : SDL_FALSE;
+#elif defined(SDL_VIDEO_DRIVER_X11)
+    SupportSysWM = (SDL20_strcmp(driver, "x11") == 0) ? SDL_TRUE : SDL_FALSE;
+#else
+    SupportSysWM = SDL_FALSE;
+#endif
+
+    SDL20_DelEventWatch(EventFilter20to12, NULL);
     SDL20_AddEventWatch(EventFilter20to12, NULL);
 
     VideoDisplayIndex = GetVideoDisplay();
@@ -1533,8 +1766,14 @@ DECLSPEC int SDLCALL
 SDL_VideoInit(const char *driver, Uint32 flags)
 {
     (void) flags;
+    FIXME("Does this need to call Init12Video?");
     return SDL20_VideoInit(driver);
 }
+
+
+static void InitializeCDSubsystem(void);
+static void QuitCDSubsystem(void);
+
 
 DECLSPEC int SDLCALL
 SDL_InitSubSystem(Uint32 sdl12flags)
@@ -1556,9 +1795,11 @@ SDL_InitSubSystem(Uint32 sdl12flags)
     SETFLAG(NOPARACHUTE);
     #undef SETFLAG
 
-    /* There's no CDROM in 2.0, but we'll just pretend it succeeded. */
-    if (sdl12flags & SDL12_INIT_CDROM)
-        CDRomInit = 1;
+    /* There's no CDROM in 2.0, but we fake it. */
+    if (sdl12flags & SDL12_INIT_CDROM) {
+        /* this never reports failure, even if there's a legit problem. You just won't see any drives. */
+        InitializeCDSubsystem();
+    }
 
     rc = SDL20_Init(sdl20flags);
     if ((rc == 0) && (sdl20flags & SDL_INIT_VIDEO)) {
@@ -1579,7 +1820,7 @@ SDL_Init(Uint32 sdl12flags)
 
 
 static void
-InitFlags12To20(const Uint32 flags12, Uint32 *_flags20, Uint32 *_extraflags)
+InitFlags12to20(const Uint32 flags12, Uint32 *_flags20, Uint32 *_extraflags)
 {
     Uint32 flags20 = 0;
     Uint32 extraflags = 0;
@@ -1621,7 +1862,7 @@ DECLSPEC Uint32 SDLCALL
 SDL_WasInit(Uint32 sdl12flags)
 {
     Uint32 sdl20flags, extraflags;
-    InitFlags12To20(sdl12flags, &sdl20flags, &extraflags);
+    InitFlags12to20(sdl12flags, &sdl20flags, &extraflags);
 
     return InitFlags20to12(SDL20_WasInit(sdl20flags)) | extraflags;
 }
@@ -1658,10 +1899,14 @@ DECLSPEC void SDLCALL
 SDL_QuitSubSystem(Uint32 sdl12flags)
 {
     Uint32 sdl20flags, extraflags;
-    InitFlags12To20(sdl12flags, &sdl20flags, &extraflags);
+    InitFlags12to20(sdl12flags, &sdl20flags, &extraflags);
 
     if (extraflags & SDL12_INIT_CDROM) {
-        CDRomInit = 0;
+        QuitCDSubsystem();
+    }
+
+    if (sdl12flags & SDL12_INIT_AUDIO) {
+        SDL_CloseAudio();
     }
 
     if (sdl12flags & SDL12_INIT_VIDEO) {
@@ -1793,6 +2038,11 @@ SDL_PushEvent(SDL12_Event *event12)
 
     SDL20_memcpy(&item->event12, event12, sizeof (SDL12_Event));
 
+    if (event12->type == SDL12_SYSWMEVENT) {  /* make a copy of the data here */
+        SDL20_memcpy(&item->syswm_msg, event12->syswm.msg, sizeof (SDL12_SysWMmsg));
+        item->event12.syswm.msg = &item->syswm_msg;
+    }
+
     return 0;
 }
 
@@ -1892,6 +2142,9 @@ SDL_EventState(Uint8 type, int state)
 
     if (state != SDL_QUERY) {
         EventStates[type] = state;
+        if ((type == SDL12_SYSWMEVENT) && SupportSysWM) {  /* we only enable syswm in SDL2 if it makes sense. */
+            SDL20_EventState(SDL_SYSWMEVENT, state);
+        }
     }
     if (state == SDL_IGNORE) {  /* drop existing events of this type. */
         while (SDL_PeepEvents(&e, 1, SDL_GETEVENT, (1<<type))) {
@@ -1901,6 +2154,72 @@ SDL_EventState(Uint8 type, int state)
 
     return retval;
 }
+
+/* Calculates the Logical Scaling viewport based on a given window size.
+   We pass the DPI-unscaled pixel size in when using this for rendering, and
+   the DPI-scaled window size when using it to transform mouse coordinates. */
+static SDL_Rect
+GetOpenGLLogicalScalingViewport(int physical_width, int physical_height)
+{
+    float want_aspect, real_aspect;
+    SDL_Rect dstrect;
+
+    want_aspect = ((float) OpenGLLogicalScalingWidth) / ((float) OpenGLLogicalScalingHeight);
+    real_aspect = ((float) physical_width) / ((float) physical_height);
+
+    if (SDL20_fabsf(want_aspect-real_aspect) < 0.0001f) {
+        /* The aspect ratios are the same, just scale appropriately */
+        dstrect.x = 0;
+        dstrect.y = 0;
+        dstrect.w = physical_width;
+        dstrect.h = physical_height;
+    } else if (want_aspect > real_aspect) {
+        /* We want a wider aspect ratio than is available - letterbox it */
+        const float scale = ((float) physical_width) / OpenGLLogicalScalingWidth;
+        dstrect.x = 0;
+        dstrect.w = physical_width;
+        dstrect.h = (int)SDL20_floorf(OpenGLLogicalScalingHeight * scale);
+        dstrect.y = (physical_height - dstrect.h) / 2;
+    } else {
+        /* We want a narrower aspect ratio than is available - use side-bars */
+        const float scale = ((float)physical_height) / OpenGLLogicalScalingHeight;
+        dstrect.y = 0;
+        dstrect.h = physical_height;
+        dstrect.w = (int)SDL20_floorf(OpenGLLogicalScalingWidth * scale);
+        dstrect.x = (physical_width - dstrect.w) / 2;
+    }
+
+    return dstrect;
+}
+
+static void
+AdjustOpenGLLogicalScalingPoint(int *x, int *y)
+{
+    SDL_Rect viewport;
+    int physical_w, physical_h;
+    float scale_x, scale_y;
+    int adjusted_x, adjusted_y;
+
+    /* Don't adjust anything if we're not using Logical Scaling */
+    if (!OpenGLLogicalScalingFBO) {
+        return;
+    }
+
+    /* we want to scale based on the window size, which is dpi-scaled */
+    SDL20_GetWindowSize(VideoWindow20, &physical_w, &physical_h);
+    viewport = GetOpenGLLogicalScalingViewport(physical_w, physical_h);
+
+    scale_x = (float)OpenGLLogicalScalingWidth / viewport.w;
+    scale_y = (float)OpenGLLogicalScalingHeight / viewport.h;
+
+    adjusted_x = (int) ((*x - viewport.x) * scale_x);
+    adjusted_y = (int) ((*y - viewport.y) * scale_y);
+
+    /* Clamp the result to the visible window */
+    *x = SDL_max(SDL_min(adjusted_x, OpenGLLogicalScalingWidth), 0);
+    *y = SDL_max(SDL_min(adjusted_y, OpenGLLogicalScalingHeight), 0);
+}
+    
 
 static Uint8 MouseButtonState20to12(const Uint32 state20)
 {
@@ -2181,6 +2500,8 @@ SDL_GetKeyName(SDL12Key key)
     return (char *) "unknown key";
 }
 
+#if 0 /* https://github.com/libsdl-org/sdl12-compat/pull/97 */
+# define KeysymFromSDL2(_ev20) Keysym20to12((_ev20)->key.keysym.sym)
 static SDL12Key
 Keysym20to12(const SDL_Keycode keysym20)
 {
@@ -2267,6 +2588,284 @@ Keysym20to12(const SDL_Keycode keysym20)
     FIXME("map some of the SDLK12_WORLD keys");
     return SDLK12_UNKNOWN;
 }
+#else
+# define KeysymFromSDL2(_ev20) Scancode20toKeysym12((_ev20)->key.keysym.scancode)
+static SDL12Key
+Scancode20toKeysym12(const SDL_Scancode scancode20)
+{
+    switch (scancode20) {
+    #define CASESCANCODE20TOKEY12(s20, k12) case SDL_SCANCODE_##s20: return SDLK12_##k12
+    CASESCANCODE20TOKEY12(A,a);
+    CASESCANCODE20TOKEY12(B,b);
+    CASESCANCODE20TOKEY12(C,c);
+    CASESCANCODE20TOKEY12(D,d);
+    CASESCANCODE20TOKEY12(E,e);
+    CASESCANCODE20TOKEY12(F,f);
+    CASESCANCODE20TOKEY12(G,g);
+    CASESCANCODE20TOKEY12(H,h);
+    CASESCANCODE20TOKEY12(I,i);
+    CASESCANCODE20TOKEY12(J,j);
+    CASESCANCODE20TOKEY12(K,k);
+    CASESCANCODE20TOKEY12(L,l);
+    CASESCANCODE20TOKEY12(M,m);
+    CASESCANCODE20TOKEY12(N,n);
+    CASESCANCODE20TOKEY12(O,o);
+    CASESCANCODE20TOKEY12(P,p);
+    CASESCANCODE20TOKEY12(Q,q);
+    CASESCANCODE20TOKEY12(R,r);
+    CASESCANCODE20TOKEY12(S,s);
+    CASESCANCODE20TOKEY12(T,t);
+    CASESCANCODE20TOKEY12(U,u);
+    CASESCANCODE20TOKEY12(V,v);
+    CASESCANCODE20TOKEY12(W,w);
+    CASESCANCODE20TOKEY12(X,x);
+    CASESCANCODE20TOKEY12(Y,y);
+    CASESCANCODE20TOKEY12(Z,z);
+    CASESCANCODE20TOKEY12(1,1);
+    CASESCANCODE20TOKEY12(2,2);
+    CASESCANCODE20TOKEY12(3,3);
+    CASESCANCODE20TOKEY12(4,4);
+    CASESCANCODE20TOKEY12(5,5);
+    CASESCANCODE20TOKEY12(6,6);
+    CASESCANCODE20TOKEY12(7,7);
+    CASESCANCODE20TOKEY12(8,8);
+    CASESCANCODE20TOKEY12(9,9);
+    CASESCANCODE20TOKEY12(0,0);
+    CASESCANCODE20TOKEY12(RETURN,RETURN);
+    CASESCANCODE20TOKEY12(ESCAPE,ESCAPE);
+    CASESCANCODE20TOKEY12(BACKSPACE,BACKSPACE);
+    CASESCANCODE20TOKEY12(TAB,TAB);
+    CASESCANCODE20TOKEY12(SPACE,SPACE);
+    CASESCANCODE20TOKEY12(MINUS,MINUS);
+    CASESCANCODE20TOKEY12(EQUALS,EQUALS);
+    CASESCANCODE20TOKEY12(LEFTBRACKET,LEFTBRACKET);
+    CASESCANCODE20TOKEY12(RIGHTBRACKET,RIGHTBRACKET);
+    CASESCANCODE20TOKEY12(BACKSLASH,BACKSLASH);
+    CASESCANCODE20TOKEY12(NONUSHASH,HASH);
+    CASESCANCODE20TOKEY12(SEMICOLON,SEMICOLON);
+    CASESCANCODE20TOKEY12(APOSTROPHE,QUOTE);
+    CASESCANCODE20TOKEY12(GRAVE,BACKQUOTE);
+    CASESCANCODE20TOKEY12(COMMA,COMMA);
+    CASESCANCODE20TOKEY12(PERIOD,PERIOD);
+    CASESCANCODE20TOKEY12(SLASH,SLASH);
+    CASESCANCODE20TOKEY12(CAPSLOCK,CAPSLOCK);
+    CASESCANCODE20TOKEY12(F1,F1);
+    CASESCANCODE20TOKEY12(F2,F2);
+    CASESCANCODE20TOKEY12(F3,F3);
+    CASESCANCODE20TOKEY12(F4,F4);
+    CASESCANCODE20TOKEY12(F5,F5);
+    CASESCANCODE20TOKEY12(F6,F6);
+    CASESCANCODE20TOKEY12(F7,F7);
+    CASESCANCODE20TOKEY12(F8,F8);
+    CASESCANCODE20TOKEY12(F9,F9);
+    CASESCANCODE20TOKEY12(F10,F10);
+    CASESCANCODE20TOKEY12(F11,F11);
+    CASESCANCODE20TOKEY12(F12,F12);
+    CASESCANCODE20TOKEY12(PRINTSCREEN,PRINT);
+    CASESCANCODE20TOKEY12(SCROLLLOCK,SCROLLOCK);
+    CASESCANCODE20TOKEY12(PAUSE,PAUSE);
+    CASESCANCODE20TOKEY12(INSERT,INSERT);
+    CASESCANCODE20TOKEY12(HOME,HOME);
+    CASESCANCODE20TOKEY12(PAGEUP,PAGEUP);
+    CASESCANCODE20TOKEY12(DELETE,DELETE);
+    CASESCANCODE20TOKEY12(END,END);
+    CASESCANCODE20TOKEY12(PAGEDOWN,PAGEDOWN);
+    CASESCANCODE20TOKEY12(RIGHT,RIGHT);
+    CASESCANCODE20TOKEY12(LEFT,LEFT);
+    CASESCANCODE20TOKEY12(DOWN,DOWN);
+    CASESCANCODE20TOKEY12(UP,UP);
+    CASESCANCODE20TOKEY12(NUMLOCKCLEAR,NUMLOCK);
+
+    CASESCANCODE20TOKEY12(KP_DIVIDE,KP_DIVIDE);
+    CASESCANCODE20TOKEY12(KP_MULTIPLY,KP_MULTIPLY);
+    CASESCANCODE20TOKEY12(KP_MINUS,KP_MINUS);
+    CASESCANCODE20TOKEY12(KP_PLUS,KP_PLUS);
+    CASESCANCODE20TOKEY12(KP_ENTER,KP_ENTER);
+    CASESCANCODE20TOKEY12(KP_1,KP1);
+    CASESCANCODE20TOKEY12(KP_2,KP2);
+    CASESCANCODE20TOKEY12(KP_3,KP3);
+    CASESCANCODE20TOKEY12(KP_4,KP4);
+    CASESCANCODE20TOKEY12(KP_5,KP5);
+    CASESCANCODE20TOKEY12(KP_6,KP6);
+    CASESCANCODE20TOKEY12(KP_7,KP7);
+    CASESCANCODE20TOKEY12(KP_8,KP8);
+    CASESCANCODE20TOKEY12(KP_9,KP9);
+    CASESCANCODE20TOKEY12(KP_0,KP0);
+
+    CASESCANCODE20TOKEY12(NONUSBACKSLASH,BACKSLASH);
+    /* In theory, this could be MENU, or COMPOSE, or neither, but on my machine, it's MENU. */
+    CASESCANCODE20TOKEY12(APPLICATION,MENU);
+    CASESCANCODE20TOKEY12(POWER,POWER);
+    CASESCANCODE20TOKEY12(F13,F13);
+    CASESCANCODE20TOKEY12(F14,F14);
+    CASESCANCODE20TOKEY12(F15,F15);
+    CASESCANCODE20TOKEY12(KP_EQUALS,KP_EQUALS);
+    /* SDL 1.2 doesn't support F16..F21 */
+    /* Nor SDL_SCANCODE_EXECUTE */
+    CASESCANCODE20TOKEY12(HELP,HELP);
+    CASESCANCODE20TOKEY12(MENU,MENU);
+    /* The next several scancodes don't have equivalents, until... */
+    CASESCANCODE20TOKEY12(SYSREQ,SYSREQ);
+    CASESCANCODE20TOKEY12(CLEAR,CLEAR);
+    /* Skip some more... */
+    CASESCANCODE20TOKEY12(LCTRL,LCTRL);
+    CASESCANCODE20TOKEY12(LSHIFT,LSHIFT);
+    CASESCANCODE20TOKEY12(LALT,LALT);
+#ifdef __MACOSX__
+    CASESCANCODE20TOKEY12(LGUI,LMETA);
+#else
+    CASESCANCODE20TOKEY12(LGUI,LSUPER);
+#endif
+    CASESCANCODE20TOKEY12(RCTRL,RCTRL);
+    CASESCANCODE20TOKEY12(RSHIFT,RSHIFT);
+    CASESCANCODE20TOKEY12(RALT,RALT);
+#ifdef __MACOSX__
+    CASESCANCODE20TOKEY12(RGUI,RMETA);
+#else
+    CASESCANCODE20TOKEY12(RGUI,RSUPER);
+#endif
+
+    CASESCANCODE20TOKEY12(MODE,MODE);
+    #undef CASESCANCODE20TOKEY12
+    default: break;
+    }
+
+    FIXME("nothing maps to SDLK12_BREAK, or SDLK12_EURO ...?");
+    FIXME("map some of the SDLK12_WORLD keys");
+    return SDLK12_UNKNOWN;
+}
+#endif
+
+static Uint8
+Scancode20to12(SDL_Scancode sc)
+{
+    /* SDL 1.2 scancodes are the actual raw scancodes (for the most part), and
+       so differ wildly between different systems. Fortunately, this means
+       they're rarely used, and often have fallbacks. Here, we support them
+       for three systems: Win32, Mac OS X, and a synthesized pseudo-Linux that
+       should work.
+       Windows scancodes are bascially just Linux ones - 8. OS X has a totally
+       different set of scancodes from everyone else. Linux's scancodes change
+       depending on what driver you're using, but only really for a few keys.
+       Since there are applications (DOSBox) which look this up and behave
+       accordingly, but have fallbacks, those keys have scancodes of 0 here,
+       to trigger the fallbacks. */
+    switch(sc) {
+#if defined(_WIN32)
+#define CASESCANCODE20TO12(sc20, sc12, sc12mac) case SDL_SCANCODE_##sc20: return (sc12 ? (sc12 - 8) : 0)
+#elif defined(__MACOSX__)
+#define CASESCANCODE20TO12(sc20, sc12, sc12mac) case SDL_SCANCODE_##sc20: return sc12mac
+#else
+#define CASESCANCODE20TO12(sc20, sc12, sc12mac) case SDL_SCANCODE_##sc20: return sc12
+#endif
+    CASESCANCODE20TO12(0, 0x13, 0x1D);
+    CASESCANCODE20TO12(1, 0x0A, 0x12);
+    CASESCANCODE20TO12(2, 0x0B, 0x13);
+    CASESCANCODE20TO12(3, 0x0C, 0x14);
+    CASESCANCODE20TO12(4, 0x0D, 0x15);
+    CASESCANCODE20TO12(5, 0x0E, 0x17);
+    CASESCANCODE20TO12(6, 0x0F, 0x16);
+    CASESCANCODE20TO12(7, 0x10, 0x1A);
+    CASESCANCODE20TO12(8, 0x11, 0x1C);
+    CASESCANCODE20TO12(9, 0x12, 0x19);
+    CASESCANCODE20TO12(A, 0x26, 0x19);
+    CASESCANCODE20TO12(APOSTROPHE, 0x30, 0x27);
+    CASESCANCODE20TO12(B, 0x38, 0x0B);
+    CASESCANCODE20TO12(BACKSLASH, 0x33, 0x2A);
+    CASESCANCODE20TO12(BACKSPACE, 0x16, 0x33);
+    CASESCANCODE20TO12(C, 0x36, 0x08);
+    CASESCANCODE20TO12(CAPSLOCK, 0x42, 0x00);
+    CASESCANCODE20TO12(COMMA, 0x3B, 0x2B);
+    CASESCANCODE20TO12(D, 0x28, 0x02);
+    CASESCANCODE20TO12(DELETE, 0x00, 0x75);
+    CASESCANCODE20TO12(DOWN, 0x00, 0x7D);
+    CASESCANCODE20TO12(E, 0x1A, 0x0E);
+    CASESCANCODE20TO12(END, 0x00, 0x77);
+    CASESCANCODE20TO12(EQUALS, 0x15, 0x18);
+    CASESCANCODE20TO12(ESCAPE, 0x09, 0x35);
+    CASESCANCODE20TO12(F, 0x29, 0x03);
+    CASESCANCODE20TO12(F1, 0x43, 0x7A);
+    CASESCANCODE20TO12(F10, 0x4C, 0x6E);
+    CASESCANCODE20TO12(F11, 0x5F, 0x67);
+    CASESCANCODE20TO12(F12, 0x60, 0x6F);
+    CASESCANCODE20TO12(F2, 0x44, 0x78);
+    CASESCANCODE20TO12(F3, 0x45, 0x63);
+    CASESCANCODE20TO12(F4, 0x46, 0x76);
+    CASESCANCODE20TO12(F5, 0x47, 0x60);
+    CASESCANCODE20TO12(F6, 0x48, 0x61);
+    CASESCANCODE20TO12(F7, 0x49, 0x62);
+    CASESCANCODE20TO12(F8, 0x4A, 0x64);
+    CASESCANCODE20TO12(F9, 0x4B, 0x65);
+    CASESCANCODE20TO12(G, 0x2A, 0x05);
+    CASESCANCODE20TO12(GRAVE, 0x31, 0x32);
+    CASESCANCODE20TO12(H, 0x2B, 0x04);
+    CASESCANCODE20TO12(HOME, 0x00, 0x73);
+    CASESCANCODE20TO12(I, 0x1F, 0x22);
+    CASESCANCODE20TO12(INSERT, 0x00, 0x72);
+    CASESCANCODE20TO12(J, 0x2C, 0x26);
+    CASESCANCODE20TO12(K, 0x2D, 0x28);
+    CASESCANCODE20TO12(KP_0, 0x5A, 0x52);
+    CASESCANCODE20TO12(KP_1, 0x57, 0x53);
+    CASESCANCODE20TO12(KP_2, 0x58, 0x54);
+    CASESCANCODE20TO12(KP_3, 0x59, 0x55);
+    CASESCANCODE20TO12(KP_4, 0x53, 0x56);
+    CASESCANCODE20TO12(KP_5, 0x54, 0x57);
+    CASESCANCODE20TO12(KP_6, 0x55, 0x58);
+    CASESCANCODE20TO12(KP_7, 0x4F, 0x59);
+    CASESCANCODE20TO12(KP_8, 0x50, 0x5B);
+    CASESCANCODE20TO12(KP_9, 0x51, 0x5C);
+    CASESCANCODE20TO12(KP_DIVIDE, 0x00, 0x4B);
+    CASESCANCODE20TO12(KP_ENTER, 0x00, 0x4C);
+    CASESCANCODE20TO12(KP_EQUALS, 0x00, 0x51);
+    CASESCANCODE20TO12(KP_MINUS, 0x52, 0x4E);
+    CASESCANCODE20TO12(KP_MULTIPLY, 0x3F, 0x42);
+    CASESCANCODE20TO12(KP_PERIOD, 0x5B, 0x41);
+    CASESCANCODE20TO12(KP_PLUS, 0x56, 0x44);
+    CASESCANCODE20TO12(L, 0x2E, 0x25);
+    CASESCANCODE20TO12(LALT, 0x40, 0x00);
+    CASESCANCODE20TO12(LCTRL, 0x25, 0x00);
+    CASESCANCODE20TO12(LEFT, 0x00, 0x7B);
+    CASESCANCODE20TO12(LEFTBRACKET, 0x22, 0x21);
+    CASESCANCODE20TO12(LGUI, 0x85, 0x00);
+    CASESCANCODE20TO12(LSHIFT, 0x32, 0x00);
+    CASESCANCODE20TO12(M, 0x3A, 0x29);
+    CASESCANCODE20TO12(MINUS, 0x14, 0x1B);
+    CASESCANCODE20TO12(N, 0x39, 0x28);
+    CASESCANCODE20TO12(NUMLOCKCLEAR, 0x4D, 0x47);
+    CASESCANCODE20TO12(O, 0x20, 0x1F);
+    CASESCANCODE20TO12(P, 0x21, 0x23);
+    CASESCANCODE20TO12(PAGEDOWN, 0x00, 0x79);
+    CASESCANCODE20TO12(PAGEUP, 0x00, 0x74);
+    CASESCANCODE20TO12(PERIOD, 0x3C, 0x2F);
+    CASESCANCODE20TO12(PRINTSCREEN, 0x6B, 0x6B);
+    CASESCANCODE20TO12(Q, 0x18, 0x0C);
+    CASESCANCODE20TO12(R, 0x1B, 0x0F);
+    CASESCANCODE20TO12(RETURN, 0x24, 0x24);
+    CASESCANCODE20TO12(RGUI, 0x86, 0x00);
+    CASESCANCODE20TO12(RIGHT, 0x00, 0x7C);
+    CASESCANCODE20TO12(RIGHTBRACKET, 0x23, 0x1E);
+    CASESCANCODE20TO12(RSHIFT, 0x3E, 0x00);
+    CASESCANCODE20TO12(S, 0x27, 0x01);
+    CASESCANCODE20TO12(SCROLLLOCK, 0x4E, 0x71);
+    CASESCANCODE20TO12(SEMICOLON, 0x2F, 0x29);
+    CASESCANCODE20TO12(SLASH, 0x3D, 0x2C);
+    CASESCANCODE20TO12(SPACE, 0x41, 0x31);
+    CASESCANCODE20TO12(T, 0x1C, 0x11);
+    CASESCANCODE20TO12(TAB, 0x17, 0x30);
+    CASESCANCODE20TO12(U, 0x1E, 0x20);
+    CASESCANCODE20TO12(UP, 0x00, 0x7E);
+    CASESCANCODE20TO12(V, 0x37, 0x09);
+    CASESCANCODE20TO12(W, 0x19, 0x0D);
+    CASESCANCODE20TO12(X, 0x35, 0x07);
+    CASESCANCODE20TO12(Y, 0x1D, 0x10);
+    CASESCANCODE20TO12(Z, 0x34, 0x06);
+#undef CASESCANCODE20TO12
+    default:
+        /* If we don't know it, return 0, which is "unknown".
+           It's also "a" on Mac OS X, but SDL 1.2 uses it as "unknown", too. */
+        return 0;
+    }
+}
 
 DECLSPEC Uint8 * SDLCALL
 SDL_GetKeyState(int *numkeys)
@@ -2312,6 +2911,7 @@ static int SDLCALL
 EventFilter20to12(void *data, SDL_Event *event20)
 {
     SDL12_Event event12;
+    SDL12_SysWMmsg msg;
 
     SDL_assert(data == NULL);  /* currently unused. */
 
@@ -2393,26 +2993,43 @@ EventFilter20to12(void *data, SDL_Event *event20)
             }
             break;
 
-        /* !!! FIXME: this is sort of a mess to convert. */
-        case SDL_SYSWMEVENT: FIXME("write me"); return 1;
+        case SDL_SYSWMEVENT:
+            if (!SupportSysWM) {
+                return 1;
+            }
+
+            #if defined(SDL_VIDEO_DRIVER_WINDOWS)
+                SDL_assert(event20->syswm.msg->subsystem == SDL_SYSWM_WINDOWS);
+                msg.hwnd = event20->syswm.msg->msg.win.hwnd;
+                msg.msg = event20->syswm.msg->msg.win.msg;
+                msg.wParam = event20->syswm.msg->msg.win.wParam;
+                msg.lParam = event20->syswm.msg->msg.win.lParam;
+            #elif defined(SDL_VIDEO_DRIVER_X11)
+                SDL_assert(event20->syswm.msg->subsystem == SDL_SYSWM_X11);
+                msg.subsystem = SDL12_SYSWM_X11;
+                SDL20_memcpy(&msg.event.xevent, &event20->syswm.msg->msg.x11.event, sizeof (XEvent));
+            #else
+                SDL_assert(!"should have been caught by !SupportsSysWM test");
+            #endif
+
+            SDL20_memcpy(&msg.version, SDL_Linked_Version(), sizeof (msg.version));
+            event12.type = SDL12_SYSWMEVENT;
+            event12.syswm.msg = &msg;  /* this is stack-allocated, but we copy and update the pointer later. */
+            break;
 
         case SDL_KEYUP:
             if (event20->key.repeat) {
                 return 1;  /* ignore 2.0-style key repeat events */
             }
-            event12.key.keysym.sym = Keysym20to12(event20->key.keysym.sym);
-            if (event12.key.keysym.sym == SDLK12_UNKNOWN) {
-                return 1;  /* drop it if we can't map it */
-            }
+            event12.key.keysym.sym = KeysymFromSDL2(event20);
 
             KeyState[event12.key.keysym.sym] = event20->key.state;
 
             event12.type = (event20->type == SDL_KEYDOWN) ? SDL12_KEYDOWN : SDL12_KEYUP;
             event12.key.which = 0;
             event12.key.state = event20->key.state;
-            FIXME("SDL1.2 and SDL2.0 scancodes are incompatible");
             /* turns out that some apps actually made use of the hardware scancodes (checking for platform beforehand) */
-            event12.key.keysym.scancode = 0;
+            event12.key.keysym.scancode = Scancode20to12(event20->key.keysym.scancode);
             event12.key.keysym.mod = event20->key.keysym.mod;  /* these match up between 1.2 and 2.0! */
             event12.key.keysym.unicode = 0;
 
@@ -2426,19 +3043,15 @@ EventFilter20to12(void *data, SDL_Event *event20)
                 return 1;  /* ignore 2.0-style key repeat events */
             }
 
-            PendingKeydownEvent.key.keysym.sym = Keysym20to12(event20->key.keysym.sym);
-            if (PendingKeydownEvent.key.keysym.sym == SDLK12_UNKNOWN) {
-                return 1;  /* drop it if we can't map it */
-            }
+            PendingKeydownEvent.key.keysym.sym = KeysymFromSDL2(event20);
 
             KeyState[PendingKeydownEvent.key.keysym.sym] = event20->key.state;
 
             PendingKeydownEvent.type = (event20->type == SDL_KEYDOWN) ? SDL12_KEYDOWN : SDL12_KEYUP;
             PendingKeydownEvent.key.which = 0;
             PendingKeydownEvent.key.state = event20->key.state;
-            FIXME("SDL1.2 and SDL2.0 scancodes are incompatible");
             /* turns out that some apps actually made use of the hardware scancodes (checking for platform beforehand) */
-            PendingKeydownEvent.key.keysym.scancode = 0;
+            PendingKeydownEvent.key.keysym.scancode = Scancode20to12(event20->key.keysym.scancode);
             PendingKeydownEvent.key.keysym.mod = event20->key.keysym.mod;  /* these match up between 1.2 and 2.0! */
             PendingKeydownEvent.key.keysym.unicode = 0;
 
@@ -2512,6 +3125,7 @@ EventFilter20to12(void *data, SDL_Event *event20)
             event12.type = SDL12_MOUSEMOTION;
             event12.motion.which = (Uint8) event20->motion.which;
             event12.motion.state = event20->motion.state;
+            AdjustOpenGLLogicalScalingPoint(&event20->motion.x, &event20->motion.y);
             event12.motion.x = (Uint16) event20->motion.x;
             event12.motion.y = (Uint16) event20->motion.y;
             event12.motion.xrel = (Sint16) event20->motion.xrel;
@@ -2525,6 +3139,7 @@ EventFilter20to12(void *data, SDL_Event *event20)
                     } else if (MousePosition.axis >= VideoSurface12->dim) { \
                         MousePosition.axis = (VideoSurface12->dim - 1); \
                     } \
+                    event12.motion.axis = MousePosition.axis; \
                 }
                 ADJUST_RELATIVE(x, xrel, w);
                 ADJUST_RELATIVE(y, yrel, h);
@@ -2543,8 +3158,15 @@ EventFilter20to12(void *data, SDL_Event *event20)
                 event12.button.button += 2; /* SDL_BUTTON_X1/2 */
             }
             event12.button.state = event20->button.state;
-            event12.button.x = (Uint16) event20->button.x;
-            event12.button.y = (Uint16) event20->button.y;
+            if (MouseInputIsRelative) {
+                /* If we're using relative mouse input, we need to use our "fake" position. */
+                event12.button.x = MousePosition.x;
+                event12.button.y = MousePosition.y;
+            } else {
+                AdjustOpenGLLogicalScalingPoint(&event20->button.x, &event20->button.y);
+                event12.button.x = (Uint16) event20->button.x;
+                event12.button.y = (Uint16) event20->button.y;
+            }
             break;
 
         case SDL_MOUSEBUTTONUP:
@@ -2555,8 +3177,15 @@ EventFilter20to12(void *data, SDL_Event *event20)
                 event12.button.button += 2; /* SDL_BUTTON_X1/2 */
             }
             event12.button.state = event20->button.state;
-            event12.button.x = (Uint16) event20->button.x;
-            event12.button.y = (Uint16) event20->button.y;
+            if (MouseInputIsRelative) {
+                /* If we're using relative mouse input, we need to use our "fake" position. */
+                event12.button.x = MousePosition.x;
+                event12.button.y = MousePosition.y;
+            } else {
+                AdjustOpenGLLogicalScalingPoint(&event20->button.x, &event20->button.y);
+                event12.button.x = (Uint16) event20->button.x;
+                event12.button.y = (Uint16) event20->button.y;
+            }
             break;
 
         case SDL_MOUSEWHEEL:
@@ -2682,7 +3311,7 @@ Rect12to20(const SDL12_Rect *rect12, SDL_Rect *rect20)
 static SDL12_Surface *
 Surface20to12(SDL_Surface *surface20)
 {
-    SDL_BlendMode blendmode;
+    SDL_BlendMode blendmode = SDL_BLENDMODE_NONE;
     SDL12_Surface *surface12 = NULL;
     SDL12_Palette *palette12 = NULL;
     SDL12_PixelFormat *format12 = NULL;
@@ -2748,11 +3377,6 @@ Surface20to12(SDL_Surface *surface20)
         format12->alpha = 255;
     }
 
-    blendmode = SDL_BLENDMODE_NONE;
-    if ((SDL20_GetSurfaceBlendMode(surface20, &blendmode) == 0) && (blendmode == SDL_BLENDMODE_BLEND)) {
-        surface12->flags |= SDL12_SRCALPHA;
-    }
-
     SDL20_zerop(surface12);
     flags = surface20->flags;
     flags &= ~SDL_SIMD_ALIGNED;  /* we don't need to map this to 1.2 */
@@ -2762,6 +3386,10 @@ Surface20to12(SDL_Surface *surface20)
     /*MAPSURFACEFLAGS(DONTFREE);*/
     #undef MAPSURFACEFLAGS
     SDL_assert(flags == 0);  /* non-zero if there's a flag we didn't map. */
+
+    if ((SDL20_GetSurfaceBlendMode(surface20, &blendmode) == 0) && (blendmode == SDL_BLENDMODE_BLEND)) {
+        surface12->flags |= SDL12_SRCALPHA;
+    }
 
     surface12->format = format12;
     surface12->w = surface20->w;
@@ -2786,7 +3414,6 @@ static void
 SetPalette12ForMasks(SDL12_Surface *surface12, const Uint32 Rmask, const Uint32 Gmask, const Uint32 Bmask)
 {
     SDL12_PixelFormat *format12;
-    SDL_PixelFormat  * format20;
     SDL_Color *color;
     int i, ncolors;
 
@@ -2844,16 +3471,6 @@ SetPalette12ForMasks(SDL12_Surface *surface12, const Uint32 Rmask, const Uint32 
             color->a = 255;
         }
 
-        format20 = surface12->surface20->format;
-        #define UPDATEFMT20(t) \
-            format20->t##mask = format12->t##mask; \
-            format20->t##loss = format12->t##loss; \
-            format20->t##shift = format12->t##shift;
-        UPDATEFMT20(R);
-        UPDATEFMT20(G);
-        UPDATEFMT20(B);
-        UPDATEFMT20(A);
-        #undef UPDATEFMT20
     }
 }
 
@@ -2872,6 +3489,21 @@ SDL_CreateRGBSurface(Uint32 flags12, int width, int height, int depth, Uint32 Rm
     if (depth == 8) {  /* don't pass masks to SDL2 for 8-bit surfaces, it'll cause problems. */
         surface20 = SDL20_CreateRGBSurface(0, width, height, depth, 0, 0, 0, 0);
     } else {
+        surface20 = SDL20_CreateRGBSurface(0, width, height, depth, Rmask, Gmask, Bmask, Amask);
+    }
+
+    /* SDL 1.2 would make a surface from almost any masks, even if it doesn't
+       make sense; specifically, it will make a surface if a color mask is
+       bogus. Sometimes this even worked because it would eventually land in
+       a generic blitter that just copied data blindly. SDL2 wants more strict
+       pixel formats, so try to detect this case and try again with a standard
+       format. */
+    if ((surface20 == NULL) && (depth >= 24) && (SDL20_MasksToPixelFormatEnum(depth, Rmask, Gmask, Bmask, Amask) == SDL_PIXELFORMAT_UNKNOWN)) {
+        /* I have no illusions this is correct, it just works for the known problem cases so far. */
+        Rmask = SDL_SwapLE32(0x000000FF);
+        Gmask = SDL_SwapLE32(0x0000FF00);
+        Bmask = SDL_SwapLE32(0x00FF0000);
+        Amask = SDL_SwapLE32(Amask ? 0xFF000000 : 0x00000000);
         surface20 = SDL20_CreateRGBSurface(0, width, height, depth, Rmask, Gmask, Bmask, Amask);
     }
 
@@ -3017,7 +3649,7 @@ SDL_GetVideoInfo(void)
 DECLSPEC int SDLCALL
 SDL_VideoModeOK(int width, int height, int bpp, Uint32 sdl12flags)
 {
-    int i, nummodes, actual_bpp = 0;
+    int i, j, actual_bpp = 0;
 
     if (!SDL20_WasInit(SDL_INIT_VIDEO)) {
         return 0;
@@ -3026,28 +3658,33 @@ SDL_VideoModeOK(int width, int height, int bpp, Uint32 sdl12flags)
     if (!(sdl12flags & SDL12_FULLSCREEN)) {
         SDL_DisplayMode mode;
         SDL20_GetDesktopDisplayMode(VideoDisplayIndex, &mode);
-        return SDL_BITSPERPIXEL(mode.format);
-    }
-
-    nummodes = SDL20_GetNumDisplayModes(VideoDisplayIndex);
-    for (i = 0; i < nummodes; ++i) {
-        SDL_DisplayMode mode;
-        SDL20_GetDisplayMode(VideoDisplayIndex, i, &mode);
-        if (!mode.w || !mode.h || (width == mode.w && height == mode.h)) {
-            if (!mode.format) {
-                return bpp;
-            }
-            if (SDL_BITSPERPIXEL(mode.format) >= (Uint32) bpp) {
-                actual_bpp = SDL_BITSPERPIXEL(mode.format);
+        actual_bpp = SDL_BITSPERPIXEL(mode.format);
+    } else {
+        for (i = 0; i < VideoModesCount; ++i) {
+            VideoModeList *vmode = &VideoModes[i];
+            for (j = 0; j < vmode->nummodes; ++j) {
+                if (vmode->modeslist12[j].w == width && vmode->modeslist12[j].h == height)
+                {
+                    if (!vmode->format) {
+                        return bpp;
+                    }
+                    if (SDL_BITSPERPIXEL(vmode->format) == 24 && bpp == 32) {
+                        actual_bpp = 32;
+                    } else if (SDL_BITSPERPIXEL(vmode->format) >= (Uint32) bpp) {
+                        actual_bpp = SDL_BITSPERPIXEL(vmode->format);
+                    }
+                }
             }
         }
     }
-    return actual_bpp;
+
+    return (actual_bpp == 24) ? 32 : actual_bpp;
 }
 
 DECLSPEC SDL12_Rect ** SDLCALL
 SDL_ListModes(const SDL12_PixelFormat *format12, Uint32 flags)
 {
+    VideoModeList *best_modes = NULL;
     Uint32 bpp;
     int i;
 
@@ -3061,8 +3698,12 @@ SDL_ListModes(const SDL12_PixelFormat *format12, Uint32 flags)
         return NULL;
     }
 
+    if (IsDummyVideo) {
+        return (SDL12_Rect **) -1;  /* 1.2's dummy driver always returns -1, and it's useful to special-case that. */
+    }
+
     if (!(flags & SDL12_FULLSCREEN)) {
-        return (SDL12_Rect **) (-1);  /* any resolution is fine. */
+        return (SDL12_Rect **) -1;  /* any resolution is fine. */
     }
 
     if (format12 && (format12 != VideoInfo12.vfmt)) {
@@ -3075,11 +3716,20 @@ SDL_ListModes(const SDL12_PixelFormat *format12, Uint32 flags)
         VideoModeList *modes = &VideoModes[i];
         if (SDL_BITSPERPIXEL(modes->format) == bpp) {
             return modes->modes12;
+        } else if (SDL_BITSPERPIXEL(modes->format) == 24 && bpp == 32) {
+            best_modes = modes;
+        } else if (SDL_BITSPERPIXEL(modes->format) > bpp) {
+            if (!best_modes || SDL_BITSPERPIXEL(modes->format) > SDL_BITSPERPIXEL(best_modes->format)) {
+                best_modes = modes;
+            }
         }
     }
 
-    SDL20_SetError("No modes support requested pixel format");
-    return NULL;
+    if (!best_modes) {
+        SDL20_SetError("No modes support requested pixel format");
+        return NULL;
+    }
+    return best_modes->modes12;
 }
 
 DECLSPEC void SDLCALL
@@ -3204,6 +3854,10 @@ SetupScreenSaver(const int flags12)
 static SDL12_Surface *
 EndVidModeCreate(void)
 {
+    if (OpenGLBlitTexture) {
+        OpenGLFuncs.glDeleteTextures(1, &OpenGLBlitTexture);
+        OpenGLBlitTexture = 0;
+    }
     if (VideoTexture20) {
         SDL20_DestroyTexture(VideoTexture20);
         VideoTexture20 = NULL;
@@ -3237,6 +3891,7 @@ EndVidModeCreate(void)
     }
 
     SDL_zero(OpenGLFuncs);
+    OpenGLBlitLockCount = 0;
     OpenGLLogicalScalingWidth = 0;
     OpenGLLogicalScalingHeight = 0;
     OpenGLLogicalScalingFBO = 0;
@@ -3302,6 +3957,10 @@ LoadOpenGLFunctions(void)
     /* GL_ARB_framebuffer_object is in core OpenGL 3.0+ with the same entry point names as the extension version. */
     if (major >= 3) {
         OpenGLFuncs.SUPPORTS_GL_ARB_framebuffer_object = SDL_TRUE;
+    }
+
+    if (major >= 2) {
+        OpenGLFuncs.SUPPORTS_GL_ARB_texture_non_power_of_two = SDL_TRUE;  /* core since 2.0 */
     }
 
     /* load everything we can. */
@@ -3445,6 +4104,7 @@ InitializeOpenGLScaling(const int w, const int h)
     OpenGLFuncs.glBindRenderbuffer(GL_RENDERBUFFER, OpenGLLogicalScalingDepth);
     OpenGLFuncs.glRenderbufferStorageMultisample(GL_RENDERBUFFER, OpenGLLogicalScalingSamples, GL_DEPTH24_STENCIL8, w, h);
     OpenGLFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, OpenGLLogicalScalingDepth);
+    OpenGLFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, OpenGLLogicalScalingDepth);
     OpenGLFuncs.glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
     if ( (OpenGLFuncs.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) || OpenGLFuncs.glGetError() ) {
@@ -3465,8 +4125,9 @@ InitializeOpenGLScaling(const int w, const int h)
         OpenGLFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, OpenGLLogicalScalingMultisampleColor);
         OpenGLFuncs.glGenRenderbuffers(1, &OpenGLLogicalScalingMultisampleDepth);
         OpenGLFuncs.glBindRenderbuffer(GL_RENDERBUFFER, OpenGLLogicalScalingMultisampleDepth);
-        OpenGLFuncs.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);  /* !!! FIXME: is an extension (or core 3.0) */
+        OpenGLFuncs.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);  FIXME("is an extension (or core 3.0)?");
         OpenGLFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, OpenGLLogicalScalingMultisampleDepth);
+        OpenGLFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, OpenGLLogicalScalingMultisampleDepth);
         OpenGLFuncs.glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
         if ( (OpenGLFuncs.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) || OpenGLFuncs.glGetError() ) {
@@ -3540,12 +4201,6 @@ SDL_SetVideoMode(int width, int height, int bpp, Uint32 flags12)
         }
     }
 
-    if ((flags12 & SDL12_OPENGLBLIT) == SDL12_OPENGLBLIT) {
-        FIXME("No OPENGLBLIT support at the moment");
-        SDL20_SetError("SDL_OPENGLBLIT is (currently) unsupported");
-        return NULL;
-    }
-
     FIXME("handle SDL_ANYFORMAT");
 
     if ((width < 0) || (height < 0)) {
@@ -3570,6 +4225,9 @@ SDL_SetVideoMode(int width, int height, int bpp, Uint32 flags12)
         bpp = SDL_BITSPERPIXEL(dmode.format);
     }
 
+    #if !SDL_VERSION_ATLEAST(2,0,14)
+    #define SDL_PIXELFORMAT_XRGB8888 SDL_PIXELFORMAT_RGB888
+    #endif
     switch (bpp) {
         case  8: appfmt = SDL_PIXELFORMAT_INDEX8; break;
         case 16: appfmt = SDL_PIXELFORMAT_RGB565; FIXME("bgr instead of rgb?"); break;
@@ -3595,6 +4253,8 @@ SDL_SetVideoMode(int width, int height, int bpp, Uint32 flags12)
         SDL20_GL_DeleteContext(VideoGLContext20);
         VideoGLContext20 = NULL;
         SDL_zero(OpenGLFuncs);
+        OpenGLBlitTexture = 0;
+        OpenGLBlitLockCount = 0;
         OpenGLLogicalScalingWidth = 0;
         OpenGLLogicalScalingHeight = 0;
         OpenGLLogicalScalingFBO = 0;
@@ -3696,6 +4356,32 @@ SDL_SetVideoMode(int width, int height, int bpp, Uint32 flags12)
                 SDL20_SetWindowFullscreen(VideoWindow20, fullscreen_flags20);
             }
         }
+
+        if ((flags12 & SDL12_OPENGLBLIT) == SDL12_OPENGLBLIT) {
+            const int pixsize = VideoSurface12->format->BytesPerPixel;
+            const GLenum glfmt = (pixsize == 4) ? GL_RGBA : GL_RGB;
+            const GLenum gltype = (pixsize == 4) ? GL_UNSIGNED_BYTE : GL_UNSIGNED_SHORT_5_6_5;
+
+            if (!OpenGLFuncs.SUPPORTS_GL_ARB_texture_non_power_of_two) {
+                SDL20_SetError("Your OpenGL drivers don't support NPOT textures for SDL_OPENGLBLIT; please upgrade.");
+                return EndVidModeCreate();
+            }
+
+            OpenGLFuncs.glGenTextures(1, &OpenGLBlitTexture);
+            OpenGLFuncs.glBindTexture(GL_TEXTURE_2D, OpenGLBlitTexture);
+            OpenGLFuncs.glTexImage2D(GL_TEXTURE_2D, 0, (pixsize == 4) ? GL_RGBA : GL_RGB, VideoSurface12->w, VideoSurface12->h, 0, glfmt, gltype, NULL);
+
+            VideoSurface12->surface20->pixels = SDL20_malloc(height * VideoSurface12->pitch);
+            VideoSurface12->pixels = VideoSurface12->surface20->pixels;
+            if (!VideoSurface12->pixels) {
+                SDL20_OutOfMemory();
+                return EndVidModeCreate();
+            }
+            SDL20_memset(VideoSurface12->pixels, 0xFF, height * VideoSurface12->pitch);  /* SDL 1.2 default OPENGLBLIT surface to full intensity */
+            VideoSurface12->flags |= SDL12_OPENGLBLIT;
+        }
+
+        SDL20_GL_SetSwapInterval(SwapInterval);
 
     } else {
         /* always use a renderer for non-OpenGL windows. */
@@ -4123,11 +4809,130 @@ UpdateRect12to20(SDL12_Surface *surface12, const SDL12_Rect *rect12, SDL_Rect *r
     }
 }
 
+/* SDL_OPENGLBLIT support APIs. https://discourse.libsdl.org/t/ogl-and-sdl/2775/3 */
+DECLSPEC void SDLCALL
+SDL_GL_Lock(void)
+{
+    if (!OpenGLBlitTexture) {
+        return;
+    }
+
+    if (++OpenGLBlitLockCount == 1) {
+        OpenGLFuncs.glPushAttrib(GL_ALL_ATTRIB_BITS);
+        OpenGLFuncs.glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+        OpenGLFuncs.glEnable(GL_TEXTURE_2D);
+        OpenGLFuncs.glEnable(GL_BLEND);
+        OpenGLFuncs.glDisable(GL_FOG);
+        OpenGLFuncs.glDisable(GL_ALPHA_TEST);
+        OpenGLFuncs.glDisable(GL_DEPTH_TEST);
+        OpenGLFuncs.glDisable(GL_SCISSOR_TEST);
+        OpenGLFuncs.glDisable(GL_STENCIL_TEST);
+        OpenGLFuncs.glDisable(GL_CULL_FACE);
+
+        OpenGLFuncs.glBindTexture(GL_TEXTURE_2D, OpenGLBlitTexture);
+        OpenGLFuncs.glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        OpenGLFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        OpenGLFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        OpenGLFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        OpenGLFuncs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+        OpenGLFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, VideoSurface12->pitch / VideoSurface12->format->BytesPerPixel);
+        OpenGLFuncs.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        OpenGLFuncs.glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+        OpenGLFuncs.glViewport(0, 0, VideoSurface12->w, VideoSurface12->h);
+        OpenGLFuncs.glMatrixMode(GL_PROJECTION);
+        OpenGLFuncs.glPushMatrix();
+        OpenGLFuncs.glLoadIdentity();
+
+        OpenGLFuncs.glOrtho(0.0, (GLdouble) VideoSurface12->w, (GLdouble) VideoSurface12->h, 0.0, 0.0, 1.0);
+
+        OpenGLFuncs.glMatrixMode(GL_MODELVIEW);
+        OpenGLFuncs.glPushMatrix();
+        OpenGLFuncs.glLoadIdentity();
+    }
+}
+
+DECLSPEC void SDLCALL
+SDL_GL_UpdateRects(int numrects, SDL12_Rect *rects12)
+{
+    if (OpenGLBlitTexture) {
+        const int srcpitch = VideoSurface12->pitch;
+        const int pixsize = VideoSurface12->format->BytesPerPixel;
+        const GLenum glfmt = (pixsize == 4) ? GL_RGBA : GL_RGB;
+        const GLenum gltype = (pixsize == 4) ? GL_UNSIGNED_BYTE : GL_UNSIGNED_SHORT_5_6_5;
+        SDL_Rect surfacerect20;
+        int i;
+
+        surfacerect20.x = surfacerect20.y = 0;
+        surfacerect20.w = VideoSurface12->w;
+        surfacerect20.h = VideoSurface12->h;
+
+        for (i = 0; i < numrects; i++) {
+            SDL_Rect rect20;
+            SDL_Rect intersected20;
+            Uint8 *src;
+
+            SDL20_IntersectRect(Rect12to20(&rects12[i], &rect20), &surfacerect20, &intersected20);
+
+            src = (((Uint8 *) VideoSurface12->pixels) + (intersected20.y * srcpitch)) + (intersected20.x * pixsize);
+            OpenGLFuncs.glTexSubImage2D(GL_TEXTURE_2D, 0, intersected20.x, intersected20.y, intersected20.w, intersected20.h, glfmt, gltype, src);
+
+            OpenGLFuncs.glBegin(GL_TRIANGLE_STRIP);
+            {
+                const GLfloat tex_x1 = ((GLfloat) intersected20.x) / ((GLfloat) VideoSurface12->w);
+                const GLfloat tex_y1 = ((GLfloat) intersected20.y) / ((GLfloat) VideoSurface12->h);
+                const GLfloat tex_x2 = tex_x1 + ((GLfloat) intersected20.w) / ((GLfloat) VideoSurface12->w);
+                const GLfloat tex_y2 = tex_y1 + ((GLfloat) intersected20.h) / ((GLfloat) VideoSurface12->h);
+                const GLint vert_x1 = (GLint) intersected20.x;
+                const GLint vert_y1 = (GLint) intersected20.y;
+                const GLint vert_x2 = vert_x1 + (GLint) intersected20.w;
+                const GLint vert_y2 = vert_y1 + (GLint) intersected20.h;
+                OpenGLFuncs.glTexCoord2f(tex_x1, tex_y1);
+                OpenGLFuncs.glVertex2i(vert_x1, vert_y1);
+                OpenGLFuncs.glTexCoord2f(tex_x2, tex_y1);
+                OpenGLFuncs.glVertex2i(vert_x2, vert_y1);
+                OpenGLFuncs.glTexCoord2f(tex_x1, tex_y2);
+                OpenGLFuncs.glVertex2i(vert_x1, vert_y2);
+                OpenGLFuncs.glTexCoord2f(tex_x2, tex_y2);
+                OpenGLFuncs.glVertex2i(vert_x2, vert_y2);
+            }
+            OpenGLFuncs.glEnd();
+        }
+    }
+}
+
+
+DECLSPEC void SDLCALL
+SDL_GL_Unlock(void)
+{
+    if (OpenGLBlitTexture) {
+        if (OpenGLBlitLockCount > 0) {
+            if (--OpenGLBlitLockCount == 0) {
+                OpenGLFuncs.glPopMatrix();
+                OpenGLFuncs.glMatrixMode(GL_PROJECTION);
+                OpenGLFuncs.glPopMatrix();
+                OpenGLFuncs.glPopClientAttrib();
+                OpenGLFuncs.glPopAttrib();
+            }
+        }
+    }
+}
+
+
 DECLSPEC void SDLCALL
 SDL_UpdateRects(SDL12_Surface *surface12, int numrects, SDL12_Rect *rects12)
 {
     /* strangely, SDL 1.2 doesn't check if surface12 is NULL before touching it */
     /* (UpdateRect, singular, does...) */
+
+    if ((surface12 == VideoSurface12) && ((surface12->flags & SDL12_OPENGLBLIT) == SDL12_OPENGLBLIT)) {
+        SDL_GL_Lock();
+        SDL_GL_UpdateRects(numrects, rects12);
+        SDL_GL_Unlock();
+        return;
+    }
+
     if (surface12->flags & SDL12_OPENGL) {
         SDL20_SetError("Use SDL_GL_SwapBuffers() on OpenGL surfaces");
         return;
@@ -4378,6 +5183,7 @@ UpdateRelativeMouseMode(void)
                 /* reset position, we'll have to track it ourselves in SDL_MOUSEMOTION events, since 1.2
                  *  would give you window coordinates, even in relative mode. */
                 SDL20_GetMouseState(&MousePosition.x, &MousePosition.y);
+                AdjustOpenGLLogicalScalingPoint(&MousePosition.x, &MousePosition.y);
             }
             SDL20_SetRelativeMouseMode(MouseInputIsRelative);
         }
@@ -4543,14 +5349,57 @@ SDL_SetColors(SDL12_Surface *surface12, const SDL_Color * colors, int firstcolor
     return SDL_SetPalette(surface12, SDL12_LOGPAL | SDL12_PHYSPAL, colors, firstcolor, ncolors);
 }
 
+
+#if defined(SDL_VIDEO_DRIVER_X11)
+/* In 1.2, these would lock the event thread (if you _used_ the event thread), and call XSync(SDL_Display, False) before unlocking */
+static void x11_lock_display(void) {}
+static void x11_unlock_display(void) {}
+#endif
+
 DECLSPEC int SDLCALL
-SDL_GetWMInfo(SDL_SysWMinfo * info)
+SDL_GetWMInfo(SDL12_SysWMinfo *info12)
 {
-    /*return SDL20_GetWindowWMInfo(VideoWindow20, info);*/
-    FIXME("write me");
-    (void)info;
-    SDL20_Unsupported();
-    return 0; /* some programs only test against 0, not -1 */
+    SDL_SysWMinfo info20;
+
+    if (info12->version.major > 1) {
+        SDL20_SetError("Requested version is unsupported");
+        return 0;  /* some programs only test against 0, not -1 */
+    } else if (!SupportSysWM) {
+        SDL20_SetError("No SysWM support available");
+        return 0;  /* some programs only test against 0, not -1 */
+    }
+
+    SDL_zero(info20);
+    SDL_VERSION(&info20.version);
+    if (!SDL20_GetWindowWMInfo(VideoWindow20, &info20)) {
+        return 0;  /* some programs only test against 0, not -1 */
+    }
+
+#if defined(SDL_VIDEO_DRIVER_WINDOWS)
+    SDL_assert(info20.subsystem == SDL_SYSWM_WINDOWS);
+    info12->window = info20.info.win.window;
+    if (SDL_VERSIONNUM(info12->version.major, info12->version.minor, info12->version.patch) >= SDL_VERSIONNUM(1, 2, 5)) {
+        info12->hglrc = (HGLRC) VideoGLContext20;
+    }
+#elif defined(SDL_VIDEO_DRIVER_X11)
+    SDL_assert(info20.subsystem == SDL_SYSWM_X11);
+    info12->subsystem = SDL12_SYSWM_X11;
+    info12->info.x11.display = info20.info.x11.display;
+    info12->info.x11.window = info20.info.x11.window;
+    if (SDL_VERSIONNUM(info12->version.major, info12->version.minor, info12->version.patch) >= SDL_VERSIONNUM(1, 0, 2)) {
+        info12->info.x11.fswindow = 0;  /* these don't exist in SDL2. */
+        info12->info.x11.wmwindow = 0;
+    }
+    if (SDL_VERSIONNUM(info12->version.major, info12->version.minor, info12->version.patch) >= SDL_VERSIONNUM(1, 2, 12)) {
+        info12->info.x11.gfxdisplay = info20.info.x11.display;  /* shrug */
+    }
+    info12->info.x11.lock_func = x11_lock_display;  /* just no-ops for now */
+    info12->info.x11.unlock_func = x11_unlock_display;
+#else
+    info12->data = 0;  /* shrug */
+#endif
+
+    return 1;
 }
 
 DECLSPEC SDL12_Overlay * SDLCALL
@@ -4844,38 +5693,15 @@ SDL_GL_SwapBuffers(void)
             const GLboolean has_scissor = OpenGLFuncs.glIsEnabled(GL_SCISSOR_TEST);
             const char *scale_method_env = SDL20_getenv("SDL12COMPAT_SCALE_METHOD");
             const SDL_bool want_nearest = (scale_method_env && !SDL20_strcmp(scale_method_env, "nearest"))? SDL_TRUE : SDL_FALSE;
+            int physical_w, physical_h;
             GLfloat clearcolor[4];
-            float want_aspect, real_aspect;
-            int drawablew, drawableh;
             SDL_Rect dstrect;
 
-            SDL20_GL_GetDrawableSize(VideoWindow20, &drawablew, &drawableh);
+            /* use the drawable size, which is != window size for HIGHDPI systems */
+            SDL20_GL_GetDrawableSize(VideoWindow20, &physical_w, &physical_h);
+            dstrect = GetOpenGLLogicalScalingViewport(physical_w, physical_h);
+
             OpenGLFuncs.glGetFloatv(GL_COLOR_CLEAR_VALUE, clearcolor);
-
-            want_aspect = ((float) OpenGLLogicalScalingWidth) / ((float) OpenGLLogicalScalingHeight);
-            real_aspect = ((float) drawablew) / ((float) drawableh);
-
-            if (SDL20_fabsf(want_aspect-real_aspect) < 0.0001f) {
-                /* The aspect ratios are the same, just scale appropriately */
-                dstrect.x = 0;
-                dstrect.y = 0;
-                dstrect.w = drawablew;
-                dstrect.h = drawableh;
-            } else if (want_aspect > real_aspect) {
-                /* We want a wider aspect ratio than is available - letterbox it */
-                const float scale = ((float) drawablew) / OpenGLLogicalScalingWidth;
-                dstrect.x = 0;
-                dstrect.w = drawablew;
-                dstrect.h = (int)SDL20_floorf(OpenGLLogicalScalingHeight * scale);
-                dstrect.y = (drawableh - dstrect.h) / 2;
-            } else {
-                /* We want a narrower aspect ratio than is available - use side-bars */
-                const float scale = ((float)drawableh) / OpenGLLogicalScalingHeight;
-                dstrect.y = 0;
-                dstrect.h = drawableh;
-                dstrect.w = (int)SDL20_floorf(OpenGLLogicalScalingWidth * scale);
-                dstrect.x = (drawablew - dstrect.w) / 2;
-            }
 
             if (has_scissor) {
                 OpenGLFuncs.glDisable(GL_SCISSOR_TEST);  /* scissor test affects framebuffer_blit */
@@ -4971,12 +5797,14 @@ SDL_GetKeyRepeat(int *delay, int *interval)
 DECLSPEC int SDLCALL
 SDL_EnableUNICODE(int enable)
 {
-    int old = EnabledUnicode;
-    EnabledUnicode = enable;
-    if (enable) {
-        SDL20_StartTextInput();
-    } else {
-        SDL20_StopTextInput();
+    const int old = EnabledUnicode;
+    if (enable >= 0) {
+        EnabledUnicode = enable;
+        if (enable) {
+            SDL20_StartTextInput();
+        } else {
+            SDL20_StopTextInput();
+        }
     }
     return old;
 }
@@ -5036,66 +5864,6 @@ SDL_putenv(const char *_var)
     return 0;
 }
 
-
-/* CD-ROM support is gone from SDL 2.0, so just have stubs that fail. */
-
-typedef void *SDL12_CD;  /* close enough.  :) */
-typedef int SDL12_CDstatus;  /* close enough.  :) */
-
-DECLSPEC int SDLCALL
-SDL_CDNumDrives(void)
-{
-    FIXME("should return -1 without SDL_INIT_CDROM");
-    return 0;
-}
-
-DECLSPEC const char *SDLCALL SDL_CDName(int drive) {
-    SDL20_Unsupported();
-    (void)drive;
-    return NULL;
-}
-DECLSPEC SDL12_CD *SDLCALL SDL_CDOpen(int drive) {
-    SDL20_Unsupported();
-    (void)drive;
-    return NULL;
-}
-DECLSPEC SDL12_CDstatus SDLCALL SDL_CDStatus(SDL12_CD *cdrom) {
-    (void) cdrom;
-    return SDL20_Unsupported();
-}
-DECLSPEC int SDLCALL SDL_CDPlayTracks(SDL12_CD *cdrom, int start_track, int start_frame, int ntracks, int nframes) {
-    (void) cdrom;
-    (void) start_track;
-    (void) start_frame;
-    (void) ntracks;
-    (void) nframes;
-    return SDL20_Unsupported();
-}
-DECLSPEC int SDLCALL SDL_CDPlay(SDL12_CD *cdrom, int start, int length) {
-    (void) cdrom;
-    (void) start;
-    (void) length;
-    return SDL20_Unsupported();
-}
-DECLSPEC int SDLCALL SDL_CDPause(SDL12_CD *cdrom) {
-    (void) cdrom;
-    return SDL20_Unsupported();
-}
-DECLSPEC int SDLCALL SDL_CDResume(SDL12_CD *cdrom) {
-    (void) cdrom;
-    return SDL20_Unsupported();
-}
-DECLSPEC int SDLCALL SDL_CDStop(SDL12_CD *cdrom) {
-    (void) cdrom;
-    return SDL20_Unsupported();
-}
-DECLSPEC int SDLCALL SDL_CDEject(SDL12_CD *cdrom) {
-    (void) cdrom;
-    return SDL20_Unsupported();
-}
-DECLSPEC void SDLCALL SDL_CDClose(SDL12_CD *cdrom) {
-    (void) cdrom;
-}
 
 #if (defined(_WIN32) || defined(__OS2__)) && !defined(SDL_PASSED_BEGINTHREAD_ENDTHREAD)
 #error SDL_PASSED_BEGINTHREAD_ENDTHREAD not defined
@@ -5371,7 +6139,7 @@ RWops12to20_size(struct SDL_RWops *rwops20)
     if (pos == -1) {
         return SDL20_Error(SDL_EFSEEK);
     }
-    size = (Sint64) rwops12->seek(rwops12, 0, RW_SEEK_END);
+    size = rwops12->seek(rwops12, 0, RW_SEEK_END);
     rwops12->seek(rwops12, pos, RW_SEEK_SET);
     rwops20->hidden.unknown.data2 = (void *) ((size_t) size);
     return size;
@@ -5492,45 +6260,866 @@ SDL_LoadWAV_RW(SDL12_RWops *rwops12, int freerwops12,
     return retval;
 }
 
+
+/* CD-ROM API!
+   We don't support physical CD drives in sdl12-compat. In modern times, it's
+   hard to find discs at all, let alone discs with audio tracks. Drives are
+   also getting scarce, and ones that are plugged into the sound output
+   hardware moreso. With this in mind, sdl12-compat can be instructed to
+   point to a filesystem directory full .mp3 files, and will pretend this is
+   an audio CD-ROM, and will decode these files and mix them into an audio
+   stream as if they were playing from a disc. */
+
+#if defined(_MSC_VER) && defined(_M_IX86)
+#include "x86_msvc.h"
+#endif
+
+#define CDAUDIO_FPS 75  /* CD audio frames per second. */
+
+/* public domain, single-header MP3 decoder for fake CD-ROM audio support! */
+#define DR_MP3_IMPLEMENTATION
+#if defined(__GNUC__) && (__GNUC__ >= 4) && \
+  !(defined(_WIN32) || defined(__EMX__))
+#define DRMP3_API __attribute__((visibility("hidden")))
+#elif defined(__APPLE__)
+#define DRMP3_API __private_extern__
+#else
+#define DRMP3_API /* just in case */
+#endif
+#define DR_MP3_NO_STDIO 1
+#define DR_MP3_NO_S16 1
+#define DR_MP3_FLOAT_OUTPUT 1
+#define DR_MP3_NO_FULL_READ 1
+#define DRMP3_ASSERT(x) SDL_assert((x))
+#define DRMP3_MALLOC(sz) SDL20_malloc((sz))
+#define DRMP3_REALLOC(p, sz) SDL20_realloc((p), (sz))
+#define DRMP3_FREE(p) SDL20_free((p))
+#define DRMP3_COPY_MEMORY(dst, src, sz) SDL20_memcpy((dst), (src), (sz))
+#define DRMP3_ZERO_MEMORY(p, sz) SDL20_memset((p), 0, (sz))
+
+#if !defined(__clang_analyzer__)
+#ifdef memset
+#undef memset
+#endif
+#ifdef memcpy
+#undef memcpy
+#endif
+#ifdef memmove
+#undef memmove
+#endif
+#define memset SDL20_memset
+#define memcpy SDL20_memcpy
+#define memmove SDL20_memmove
+#endif
+
+#include "dr_mp3.h"
+
+static size_t
+mp3_sdlrwops_read(void *data, void *buf, size_t bytesToRead)
+{
+    return SDL20_RWread((SDL_RWops *) data, buf, 1, bytesToRead);
+}
+
+static drmp3_bool32
+mp3_sdlrwops_seek(void *data, int offset, drmp3_seek_origin origin)
+{
+    const int whence = (origin == drmp3_seek_origin_start) ? RW_SEEK_SET : RW_SEEK_CUR;
+    SDL_assert((origin == drmp3_seek_origin_start) || (origin == drmp3_seek_origin_current));
+    return (SDL20_RWseek((SDL_RWops *) data, offset, whence) == -1) ? DRMP3_FALSE : DRMP3_TRUE;
+}
+
+
+static int OpenSDL2AudioDevice(SDL_AudioSpec *);
+static void CloseSDL2AudioDevice(void);
+static SDL_bool ResetAudioStream(SDL_AudioStream **_stream, SDL_AudioSpec *spec, const SDL_AudioSpec *to, const SDL_AudioFormat fromfmt, const Uint8 fromchannels, const int fromfreq);
+
 typedef struct
 {
-    void (SDLCALL *app_callback)(void *userdata, Uint8 *stream, int len);
-    void *app_userdata;
-    Uint8 silence;
+    SDL_AudioSpec device_format;
+
+    SDL_bool app_callback_opened;
+    SDL_AudioSpec app_callback_format;
+    SDL_AudioStream *app_callback_stream;
+
+    SDL_bool cdrom_opened;
+    SDL_AudioSpec cdrom_format;
+    SDL_AudioStream *cdrom_stream;
+
+    SDL12_CDstatus cdrom_status;
+    int cdrom_pcm_frames_written;
+    int cdrom_cur_track;
+    int cdrom_cur_frame;
+    int cdrom_stop_ntracks;
+    int cdrom_stop_nframes;
+    drmp3 cdrom_mp3;
+
+    Uint8 *mix_buffer;
+    size_t mixbuflen;
 } AudioCallbackWrapperData;
 
 static AudioCallbackWrapperData *audio_cbdata = NULL;
+static SDL_atomic_t audio_callback_paused;
+
+
+static void
+FreeMp3(drmp3 *mp3)
+{
+    SDL_RWops *rw = (SDL_RWops *) mp3->pUserData;
+    if (rw) {
+        drmp3_uninit(mp3);
+        mp3->pUserData = NULL;
+        SDL20_RWclose(rw);
+    }
+}
+
+
+static SDL_bool
+CDSubsystemIsInitialized(void)
+{
+    if (!CDRomInit) {
+        SDL20_SetError("CD-ROM subsystem not initialized");
+        return SDL_FALSE;
+    }
+    return SDL_TRUE;
+}
+
+/* This never reports failure; if there's a problem, we report zero drives found. */
+static void
+InitializeCDSubsystem(void)
+{
+    const char *cdpath;
+
+    FIXME("Is subsystem init reference counted in SDL 1.2?");  /* it is in SDL2, but I don't know for 1.2. */
+    if (CDRomInit) {
+        return;
+    }
+
+    cdpath = SDL20_getenv("SDL12COMPAT_FAKE_CDROM_PATH");
+    if (cdpath) {
+        CDRomPath = SDL_strdup(cdpath);
+    }
+
+    CDRomInit = SDL_TRUE;
+}
+
+static void
+QuitCDSubsystem(void)
+{
+    if (!CDRomInit) {
+        return;
+    }
+    SDL_free(CDRomPath);
+    CDRomPath = NULL;
+    CDRomInit = SDL_FALSE;
+}
+
+DECLSPEC int SDLCALL
+SDL_CDNumDrives(void)
+{
+    if (!CDSubsystemIsInitialized()) {
+        return -1;
+    }
+
+    if (!CDRomPath) {
+        static SDL_bool warned_once = SDL_FALSE;
+        if (!warned_once) {
+            warned_once = SDL_TRUE;
+            SDL20_Log("This app is looking for CD-ROM drives, but no path was specified");
+            SDL20_Log("Set the SDL12COMPAT_FAKE_CDROM_PATH environment variable to a directory");
+            SDL20_Log("of MP3 files named trackXX.mp3 where XX is a track number in two digits");
+            SDL20_Log("from 01 to 99");
+        }
+    }
+
+    return CDRomPath ? 1 : 0;
+}
+
+static SDL_bool
+ValidCDDriveIndex(const int drive)
+{
+    if (!CDSubsystemIsInitialized()) {
+        return SDL_FALSE;
+    }
+
+    if (!CDRomPath || (drive != 0)) {
+        SDL20_SetError("Invalid CD-ROM drive index");
+        return SDL_FALSE;
+    }
+
+    return SDL_TRUE;
+}
+
+DECLSPEC const char * SDLCALL
+SDL_CDName(int drive)
+{
+    return ValidCDDriveIndex(drive) ? CDRomPath : NULL;
+}
+
+DECLSPEC SDL12_CD * SDLCALL
+SDL_CDOpen(int drive)
+{
+    SDL12_CD *retval;
+    size_t alloclen;
+    char *fullpath;
+    drmp3 *mp3 = NULL;
+    Uint32 total_track_offset = 0;
+
+    if (!ValidCDDriveIndex(drive)) {
+        return NULL;
+    }
+
+    retval = (SDL12_CD *) SDL20_calloc(1, sizeof(SDL12_CD));
+    if (!retval) {
+        SDL20_OutOfMemory();
+        return NULL;
+    }
+
+    alloclen = SDL20_strlen(CDRomPath) + 32;
+    fullpath = (char *) SDL20_malloc(alloclen);
+    if (fullpath == NULL) {
+        SDL20_free(retval);
+        SDL20_OutOfMemory();
+        return NULL;
+    }
+
+    mp3 = (drmp3 *) SDL20_malloc(sizeof (drmp3));
+    if (!mp3) {
+        SDL20_free(fullpath);
+        SDL20_free(retval);
+        SDL20_OutOfMemory();
+        return NULL;
+    }
+
+    /* We should probably do a proper enumeration of this directory,
+       but that needs platform-specific code that SDL2 doesn't offer.
+       readdir() is surprisingly hard to do without a bunch of different
+       platform backends! We just open files until we fail to do so,
+       and then stop. */
+    FIXME("Can we do something more robust than this for directory enumeration?");
+    for (;;) {
+        SDL_RWops *rw;
+        drmp3_uint64 pcmframes;
+        drmp3_uint32 samplerate;
+        SDL12_CDtrack *track;
+        int c;   char c0, c1;
+
+        /* we only report audio tracks, starting at 1... */
+        FIXME("Let there be fake data tracks");
+        c = retval->numtracks + 1;
+        c0 = c / 10 + '0';
+        c1 = c % 10 + '0';
+        SDL20_snprintf(fullpath, alloclen, "%s%strack%c%c.mp3", CDRomPath, DIRSEP, c0, c1);
+        rw = SDL20_RWFromFile(fullpath, "rb");
+        if (!rw && c > 1) {
+            break;  /* ok, we're done looking for more. */
+        }
+
+        track = &retval->track[retval->numtracks];
+        if (!rw) {
+            track->type = 4; /* data track. E.g.: quake's audio starts at track 2. */
+        } else {
+            if (!drmp3_init(mp3, mp3_sdlrwops_read, mp3_sdlrwops_seek, rw, NULL)) {
+                SDL20_RWclose(rw);
+                break;  /* ok, we're done looking for more. */
+            }
+            pcmframes = drmp3_get_pcm_frame_count(mp3);
+            samplerate = mp3->sampleRate;
+            FreeMp3(mp3);
+
+            track->id = retval->numtracks;
+            track->type = 0;  /* audio track. Data tracks are 4. */
+            track->length = (Uint32) ((((double) pcmframes) / ((double) samplerate)) * CDAUDIO_FPS);
+            track->offset = total_track_offset;
+            total_track_offset += track->length;
+        }
+
+        retval->numtracks++;
+
+        if (retval->numtracks == 99) {
+            break;  /* max tracks you can have on an audio CD. */
+        }
+    }
+    if (retval->numtracks == 1 && retval->track[0].type != 0) {
+        retval->numtracks = 0; /* data-only */
+    }
+    SDL20_free(mp3);
+    SDL20_free(fullpath);
+
+    retval->id = 1;  /* just to be non-zero, I guess. */
+    retval->status = (retval->numtracks > 0) ? SDL12_CD_STOPPED : SDL12_CD_TRAYEMPTY;
+
+    if (retval->numtracks > 0) {
+        SDL_AudioSpec want;
+        SDL_zero(want);
+        want.freq = 44100;
+        want.format = AUDIO_F32SYS;
+        want.channels = 2;
+        want.samples = 4096;
+
+        if (!OpenSDL2AudioDevice(&want)) {
+            retval->numtracks = 0;
+            retval->status = SDL12_CD_TRAYEMPTY;
+        } else {
+            /* Device is locked now, even if was opened and playing before. Set up some things. */
+            SDL20_memcpy(&audio_cbdata->cdrom_format, &want, sizeof (SDL_AudioSpec));
+            audio_cbdata->cdrom_opened = SDL_TRUE;
+            audio_cbdata->cdrom_status = SDL12_CD_STOPPED;
+            audio_cbdata->cdrom_pcm_frames_written = 0;
+            audio_cbdata->cdrom_cur_track = 0;
+            audio_cbdata->cdrom_cur_frame = 0;
+            SDL20_UnlockAudio();
+        }
+    }
+
+    CDRomDevice = retval;  /* NULL API args use the last opened device. */
+
+    return retval;
+}
+
+static SDL12_CD *
+ValidCDDevice(SDL12_CD *cdrom)
+{
+    if (!CDSubsystemIsInitialized()) {
+        return NULL;
+    } else if (!cdrom) {
+        if (!CDRomDevice) {
+            SDL20_SetError("CD-ROM not opened");
+        } else {
+            cdrom = CDRomDevice;
+        }
+    }
+    return cdrom;
+}
+
+
+DECLSPEC SDL12_CDstatus SDLCALL
+SDL_CDStatus(SDL12_CD *cdrom)
+{
+    SDL12_CDstatus retval;
+
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return SDL12_CD_ERROR;
+    }
+
+    SDL20_LockAudio();  /* we update this during the audio callback. */
+    if (audio_cbdata) {
+        cdrom->status = audio_cbdata->cdrom_status;
+        cdrom->cur_track = audio_cbdata->cdrom_cur_track;
+        cdrom->cur_frame = audio_cbdata->cdrom_cur_frame;
+    }
+    retval = cdrom->status;
+    SDL20_UnlockAudio();
+
+    return retval;
+}
+
+static SDL_bool
+LoadCDTrack(const int tracknum, drmp3 *mp3)
+{
+    const SDL_AudioSpec *have = &audio_cbdata->device_format;
+    SDL_RWops *rw = NULL;
+    const size_t alloclen = SDL20_strlen(CDRomPath) + 32;
+    char *fullpath = (char *) SDL_malloc(alloclen);
+    const int c = tracknum + 1;
+    char c0, c1;
+
+    if (!fullpath) {
+        return SDL_FALSE;
+    }
+
+    c0 = c / 10 + '0';
+    c1 = c % 10 + '0';
+    SDL20_snprintf(fullpath, alloclen, "%s%strack%c%c.mp3", CDRomPath, DIRSEP, c0, c1);
+    rw = SDL20_RWFromFile(fullpath, "rb");
+    SDL20_free(fullpath);
+
+    if (!rw) {
+        return SDL_FALSE;
+    }
+
+    if (!drmp3_init(mp3, mp3_sdlrwops_read, mp3_sdlrwops_seek, rw, NULL)) {
+        SDL20_RWclose(rw);
+        return SDL_FALSE;
+    }
+
+    if (!ResetAudioStream(&audio_cbdata->cdrom_stream, &audio_cbdata->cdrom_format, have, AUDIO_F32SYS, mp3->channels, mp3->sampleRate)) {
+        FreeMp3(mp3);
+        return SDL_FALSE;
+    }
+
+    return SDL_TRUE;
+}
+
+static int
+StartCDAudioPlaying(SDL12_CD *cdrom, const int start_track, const int start_frame, const int ntracks, const int nframes)
+{
+    drmp3 *mp3 = (drmp3 *) SDL20_malloc(sizeof (drmp3));
+    const SDL_bool loaded = mp3 ? LoadCDTrack(start_track, mp3) : SDL_FALSE;
+    const SDL_bool seeking = (loaded && (start_frame > 0))? SDL_TRUE : SDL_FALSE;
+    const drmp3_uint64 pcm_frame = seeking ? ((drmp3_uint64) ((start_frame / 75.0) * mp3->sampleRate)) : 0;
+
+    if (!mp3) {
+        return SDL20_OutOfMemory();
+    }
+
+    if (seeking) {   /* do seeking before handing off to the audio thread. */
+        drmp3_seek_to_pcm_frame(mp3, pcm_frame);
+    }
+
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        cdrom->status = audio_cbdata->cdrom_status = loaded ? SDL12_CD_PLAYING : SDL12_CD_TRAYEMPTY;
+        audio_cbdata->cdrom_pcm_frames_written = (int) pcm_frame;
+        audio_cbdata->cdrom_cur_track = start_track;
+        audio_cbdata->cdrom_cur_frame = start_frame;
+        audio_cbdata->cdrom_stop_ntracks = ntracks;
+        audio_cbdata->cdrom_stop_nframes = nframes;
+        FreeMp3(&audio_cbdata->cdrom_mp3);
+        if (loaded) {
+            SDL20_memcpy(&audio_cbdata->cdrom_mp3, mp3, sizeof (drmp3));
+        }
+    }
+    SDL20_UnlockAudio();
+
+    SDL20_free(mp3);
+
+    return loaded ? 0 : SDL20_SetError("Failed to start CD track");
+}
+
+
+DECLSPEC int SDLCALL
+SDL_CDPlayTracks(SDL12_CD *cdrom, int start_track, int start_frame, int ntracks, int nframes)
+{
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return -1;
+    } else if (cdrom->status == SDL12_CD_TRAYEMPTY) {
+        return SDL20_SetError("Tray empty");
+    } else if ((start_track < 0) || (start_track >= cdrom->numtracks)) {
+        return SDL20_SetError("Invalid start track");
+    } else if ((start_frame < 0) || (((Uint32) start_frame) >= cdrom->track[start_track].length)) {
+        return SDL20_SetError("Invalid start frame");
+    } else if ((ntracks < 0) || ((start_track + ntracks) >= cdrom->numtracks)) {
+        return SDL20_SetError("Invalid number of tracks");
+    } else if ((nframes < 0) || (((Uint32) nframes) >= cdrom->track[start_track + ntracks].length)) {
+        return SDL20_SetError("Invalid number of frames");
+    }
+
+    if (!ntracks && !nframes) {
+        ntracks = cdrom->numtracks - start_track;
+        nframes = cdrom->track[cdrom->numtracks - 1].length;
+    }
+
+    return StartCDAudioPlaying(cdrom, start_track, start_frame, ntracks, nframes);
+}
+
+DECLSPEC int SDLCALL
+SDL_CDPlay(SDL12_CD *cdrom, int start, int length)
+{
+    const Uint32 ui32start = (Uint32) start;
+    Uint32 remain = (Uint32) length;
+    int start_track = -1;
+    int start_frame = -1;
+    int ntracks = -1;
+    int nframes = -1;
+    int i;
+
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return -1;
+    } else if (cdrom->status == SDL12_CD_TRAYEMPTY) {
+        return SDL20_SetError("Tray empty");
+    } else if (start < 0) {
+        return SDL20_SetError("Invalid start");
+    } else if (length < 0) {
+        return SDL20_SetError("Invalid length");
+    }
+
+    for (i = 0; i < cdrom->numtracks; i++) {
+        if ((ui32start >= cdrom->track[i].offset) && (ui32start < (cdrom->track[i].offset + cdrom->track[i].length))) {
+            start_track = i;
+            break;
+        }
+    }
+
+    if (start_track == -1) {
+        return SDL20_SetError("Invalid start");
+    }
+
+    start_frame = start - cdrom->track[start_track].offset;
+
+    if (remain < (cdrom->track[start_frame].length - start_frame)) {
+        ntracks = 0;
+        nframes = remain;
+        remain = 0;
+    } else {
+        remain -= (cdrom->track[start_frame].length - start_frame);
+        for (i = start_track + 1; i < cdrom->numtracks; i++) {
+            if (remain < cdrom->track[i].length) {
+                ntracks = i - start_track;
+                nframes = remain;
+                remain = 0;
+                break;
+            }
+            remain -= cdrom->track[i].length;
+        }
+    }
+
+    if (remain) {
+        ntracks = (cdrom->numtracks - start_track) - 1;
+        nframes = cdrom->track[cdrom->numtracks - 1].length;
+    }
+
+    return StartCDAudioPlaying(cdrom, start_track, start_frame, ntracks, nframes);
+}
+
+DECLSPEC int SDLCALL
+SDL_CDPause(SDL12_CD *cdrom)
+{
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return -1;
+    } else if (cdrom->status == SDL12_CD_TRAYEMPTY) {
+        return SDL20_SetError("Tray empty");
+    }
+
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        if (audio_cbdata->cdrom_status == SDL12_CD_PLAYING) {
+            audio_cbdata->cdrom_status = SDL12_CD_PAUSED;
+        }
+        cdrom->status = audio_cbdata->cdrom_status;
+    }
+    SDL20_UnlockAudio();
+    return 0;
+}
+
+DECLSPEC int SDLCALL
+SDL_CDResume(SDL12_CD *cdrom)
+{
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return -1;
+    } else if (cdrom->status == SDL12_CD_TRAYEMPTY) {
+        return SDL20_SetError("Tray empty");
+    }
+
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        if (audio_cbdata->cdrom_status == SDL12_CD_PAUSED) {
+            audio_cbdata->cdrom_status = SDL12_CD_PLAYING;
+        }
+        cdrom->status = audio_cbdata->cdrom_status;
+    }
+    SDL20_UnlockAudio();
+    return 0;
+}
+
+
+DECLSPEC int SDLCALL
+SDL_CDStop(SDL12_CD *cdrom)
+{
+    SDL_RWops *oldrw = NULL;
+
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return -1;
+    }
+
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        if ((audio_cbdata->cdrom_status == SDL12_CD_PLAYING) || (audio_cbdata->cdrom_status == SDL12_CD_PAUSED)) {
+            audio_cbdata->cdrom_status = SDL12_CD_STOPPED;
+            FreeMp3(&audio_cbdata->cdrom_mp3);
+        }
+        cdrom->status = audio_cbdata->cdrom_status;
+    }
+    SDL20_UnlockAudio();
+
+    if (oldrw) {
+        SDL20_RWclose(oldrw);
+    }
+    return 0;
+}
+
+DECLSPEC int SDLCALL
+SDL_CDEject(SDL12_CD *cdrom)
+{
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return -1;
+    }
+
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        audio_cbdata->cdrom_status = SDL12_CD_TRAYEMPTY;
+        FreeMp3(&audio_cbdata->cdrom_mp3);
+    }
+    cdrom->status = SDL12_CD_TRAYEMPTY;
+    SDL20_UnlockAudio();
+    return 0;
+}
+
+DECLSPEC void SDLCALL
+SDL_CDClose(SDL12_CD *cdrom)
+{
+    if ((cdrom = ValidCDDevice(cdrom)) == NULL) {
+        return;
+    }
+
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        audio_cbdata->cdrom_opened = SDL_FALSE;
+    }
+    SDL20_UnlockAudio();
+
+    if (audio_cbdata) {
+        FreeMp3(&audio_cbdata->cdrom_mp3);
+        SDL20_FreeAudioStream(audio_cbdata->cdrom_stream);
+        audio_cbdata->cdrom_stream = NULL;
+    }
+
+    CloseSDL2AudioDevice();
+
+    if (cdrom == CDRomDevice) {
+        CDRomDevice = NULL;
+    }
+    SDL20_free(cdrom);
+}
+
+
+static void
+FakeCdRomAudioCallback(AudioCallbackWrapperData *data, Uint8 *stream, int len, const SDL_bool must_mix)
+{
+    Uint32 total_available, available = 0;
+    Uint32 channels, want_frames;
+
+    if (data->cdrom_status != SDL12_CD_PLAYING) {
+        if (!must_mix) {
+            SDL20_memset(stream, data->device_format.silence, len);
+        }
+        return;
+    }
+
+    SDL_assert((data->cdrom_status == SDL12_CD_PLAYING) && (data->cdrom_mp3.pUserData != NULL));
+
+    channels = data->cdrom_format.channels;
+    want_frames = data->cdrom_format.samples / channels;
+
+    while ((!data->cdrom_mp3.atEnd) && (SDL20_AudioStreamAvailable(data->cdrom_stream) < len)) {
+        const Uint32 frames_read = (Uint32) drmp3_read_pcm_frames_f32(&data->cdrom_mp3, want_frames, (float *) data->mix_buffer);
+        const Uint32 bytes_read = frames_read * channels * sizeof (float);
+        SDL_assert(bytes_read <= data->cdrom_format.size);
+        if ((!bytes_read) || (SDL20_AudioStreamPut(data->cdrom_stream, data->mix_buffer, bytes_read) == -1)) {  /* probably out of memory if failed */
+            data->cdrom_mp3.atEnd = DRMP3_TRUE;  /* force this to fail from now on */
+            SDL20_AudioStreamFlush(data->cdrom_stream);  /* make sure all we've put is available to get. */
+            break;
+        }
+    }
+
+    total_available = SDL20_AudioStreamAvailable(data->cdrom_stream);
+    available = total_available;
+    if (((Uint32) len) < available) {
+        available = (Uint32) len;
+    }
+
+    if (available > 0) {
+        if (!must_mix) {
+            SDL20_AudioStreamGet(data->cdrom_stream, stream, available);
+        } else {
+            SDL20_AudioStreamGet(data->cdrom_stream, data->mix_buffer, available);
+            SDL20_MixAudio(stream, data->mix_buffer, available, SDL_MIX_MAXVOLUME);
+        }
+
+        data->cdrom_pcm_frames_written += (int) ((available / ((double) SDL_AUDIO_BITSIZE(data->device_format.format) / 8.0)) / data->device_format.channels);
+        data->cdrom_cur_frame = (int) ((((double)data->cdrom_pcm_frames_written) / ((double)data->device_format.freq)) * CDAUDIO_FPS);
+        if (data->cdrom_stop_ntracks == 0) {
+            if (data->cdrom_cur_frame >= data->cdrom_stop_nframes) {
+                data->cdrom_mp3.atEnd = DRMP3_TRUE;  /* played all that was requested! */
+            }
+        }
+    }
+
+    if ((total_available == 0) && (data->cdrom_mp3.atEnd)) {  /* mp3 is done for whatever reason */
+        SDL_bool silence = ((!must_mix) && (available < ((Uint32) len))) ? SDL_TRUE : SDL_FALSE;  /* silence any section we couldn't provide */
+
+        FreeMp3(&data->cdrom_mp3);
+
+        if (data->cdrom_stop_ntracks > 0) {
+            data->cdrom_stop_ntracks--;
+            data->cdrom_pcm_frames_written = 0;
+            data->cdrom_cur_frame = 0;
+
+            if (data->cdrom_status == SDL12_CD_PLAYING) {  /* go on to next track? */
+                const SDL_bool loaded = LoadCDTrack(++data->cdrom_cur_track, &data->cdrom_mp3);
+                if (!loaded) {
+                    data->cdrom_status = SDL12_CD_TRAYEMPTY;  FIXME("Maybe just mark it stopped?");
+                } else {  /* let new track fill out rest of callback. */
+                    if (available < ((Uint32) len)) {
+                        FakeCdRomAudioCallback(data, stream + available, len - available, must_mix);
+                        silence = SDL_FALSE;
+                    }
+                }
+            }
+        } else {
+            data->cdrom_status = SDL12_CD_STOPPED;  /* played all that was requested! */
+        }
+
+        if (silence) {
+            SDL20_memset(stream + available, data->device_format.silence, len - available);
+        }
+    }
+}
+
 
 static void SDLCALL
 AudioCallbackWrapper(void *userdata, Uint8 *stream, int len)
 {
     AudioCallbackWrapperData *data = (AudioCallbackWrapperData *) userdata;
-    SDL20_memset(stream, data->silence, len);  /* SDL2 doesn't clear the stream before calling in here, but 1.2 expects it. */
-    data->app_callback(data->app_userdata, stream, len);
+    SDL_bool must_mix = SDL_FALSE;
+
+    if (data->app_callback_opened && !SDL20_AtomicGet(&audio_callback_paused)) {
+        while (SDL20_AudioStreamAvailable(data->app_callback_stream) < len) {
+            SDL20_memset(data->mix_buffer, data->app_callback_format.silence, data->app_callback_format.size);  /* SDL2 doesn't clear the stream before calling in here, but 1.2 expects it. */
+            data->app_callback_format.callback(data->app_callback_format.userdata, data->mix_buffer, data->app_callback_format.size);
+            if (SDL20_AudioStreamPut(data->app_callback_stream, data->mix_buffer, data->app_callback_format.size) == -1) {  /* probably out of memory if failed */
+                break;  /* this will make the AudioStreamGet call fail. */
+            }
+        }
+        if (SDL20_AudioStreamGet(data->app_callback_stream, stream, len) != len) {
+            SDL20_memset(stream, data->device_format.silence, len);
+        } else {
+            must_mix = SDL_TRUE;
+        }
+    }
+
+    FakeCdRomAudioCallback(data, stream, len, must_mix);
+}
+
+
+static SDL_bool
+ResetAudioStream(SDL_AudioStream **_stream, SDL_AudioSpec *spec, const SDL_AudioSpec *to, const SDL_AudioFormat fromfmt, const Uint8 fromchannels, const int fromfreq)
+{
+    if ((!*_stream) || (spec->channels != fromchannels) || (spec->format != fromfmt) || (spec->freq != fromfreq)) {
+        SDL20_FreeAudioStream(*_stream);
+        *_stream = SDL20_NewAudioStream(fromfmt, fromchannels, fromfreq, to->format, to->channels, to->freq);
+        if (!*_stream) {
+            return SDL_FALSE;
+        }
+
+        spec->channels = fromchannels;
+        spec->format = fromfmt;
+        spec->freq = fromfreq;
+        spec->size = spec->samples * spec->channels * (SDL_AUDIO_BITSIZE(spec->format) / 8);
+
+        if (audio_cbdata->mixbuflen < spec->size) {
+            void *ptr = SDL20_realloc(audio_cbdata->mix_buffer, spec->size);
+            if (!ptr) {
+                SDL20_FreeAudioStream(*_stream);
+                *_stream = NULL;
+                SDL20_OutOfMemory();
+                return SDL_FALSE;
+            }
+            audio_cbdata->mixbuflen = spec->size;
+            audio_cbdata->mix_buffer = (Uint8 *) ptr;
+        }
+    }
+    return SDL_TRUE;
+}
+
+static SDL_bool
+ResetAudioStreamForDeviceChange(SDL_AudioStream **_stream, SDL_AudioSpec *spec)
+{
+    if (*_stream == NULL) {
+        return SDL_TRUE;  /* no stream, no need to reset it. */
+    }
+    SDL20_FreeAudioStream(*_stream);  /* force it to rebuild because destination format changed. */
+    *_stream = NULL;
+    return ResetAudioStream(_stream, spec, &audio_cbdata->device_format, spec->format, spec->channels, spec->freq);
+}
+
+static int
+OpenSDL2AudioDevice(SDL_AudioSpec *want)
+{
+    void (SDLCALL *orig_callback)(void *userdata, Uint8 *stream, int len) = want->callback;
+    void *orig_userdata = want->userdata;
+    int retval;
+
+    /* Two things use the audio device: the app, through 1.2's SDL_OpenAudio,
+       and the fake CD-ROM device. Either can open the device, and both write
+       to SDL_AudioStreams to buffer and convert data. We try to open the device
+       in a format that accommodates both inputs, but we might close the device
+       and reopen it if we need more channels, etc. */
+    if (audio_cbdata != NULL) {  /* device is already open. */
+        SDL_AudioSpec *have = &audio_cbdata->device_format;
+        if ( (want->freq > have->freq) ||
+             (want->channels > have->channels) ||
+             (want->samples > have->samples) ||
+             ( (SDL_AUDIO_ISFLOAT(want->format)) && (!SDL_AUDIO_ISFLOAT(have->format)) ) ||
+             ( SDL_AUDIO_BITSIZE(want->format) > SDL_AUDIO_BITSIZE(have->format) ) ) {
+            SDL20_CloseAudio();
+        } else {
+            SDL20_LockAudio();  /* Device is already at acceptable parameters, just pause it for further setup by caller. */
+            return SDL_TRUE;
+        }
+    } else {
+        audio_cbdata = (AudioCallbackWrapperData *) SDL20_calloc(1, sizeof (AudioCallbackWrapperData));
+        if (!audio_cbdata) {
+            SDL20_OutOfMemory();
+            return SDL_FALSE;
+        }
+    }
+
+    FIXME("if this fails, we need to deal with app callback or cd-rom no longer working");
+    want->callback = AudioCallbackWrapper;
+    want->userdata = audio_cbdata;
+    retval = (SDL20_OpenAudio(want, &audio_cbdata->device_format) == 0);
+    want->callback = orig_callback;
+    want->userdata = orig_userdata;
+    want->size = want->samples * want->channels * (SDL_AUDIO_BITSIZE(want->format) / 8);
+
+    /* reset audiostreams if device format changed. */
+    FIXME("deal with failure in here");
+    ResetAudioStreamForDeviceChange(&audio_cbdata->app_callback_stream, &audio_cbdata->app_callback_format);
+    ResetAudioStreamForDeviceChange(&audio_cbdata->cdrom_stream, &audio_cbdata->cdrom_format);
+
+    SDL20_LockAudio();
+    SDL20_PauseAudio(0);  /* always unpause, but caller will unlock after finalizing setup. */
+
+    return retval;
+}
+
+static void
+CloseSDL2AudioDevice(void)
+{
+    int close_sdl2_device;
+
+    SDL20_LockAudio();
+    close_sdl2_device = (audio_cbdata && !audio_cbdata->app_callback_opened && !audio_cbdata->cdrom_opened);
+    SDL20_UnlockAudio();
+
+    if (close_sdl2_device) {
+        SDL20_CloseAudio();
+        SDL20_FreeAudioStream(audio_cbdata->app_callback_stream);
+        SDL20_FreeAudioStream(audio_cbdata->cdrom_stream);
+        SDL20_free(audio_cbdata->mix_buffer);
+        SDL20_free(audio_cbdata);
+        audio_cbdata = NULL;
+    }
 }
 
 
 DECLSPEC int SDLCALL
 SDL_OpenAudio(SDL_AudioSpec *want, SDL_AudioSpec *obtained)
 {
-    AudioCallbackWrapperData *data;
-    int retval;
+    int already_opened;
 
     /* SDL2 uses a NULL callback to mean "we plan to use SDL_QueueAudio()" */
     if (want && (want->callback == NULL)) {
         return SDL20_SetError("Callback can't be NULL");
     }
 
-    data = (AudioCallbackWrapperData *) SDL20_calloc(1, sizeof (AudioCallbackWrapperData));
-    if (!data) {
-        return SDL20_OutOfMemory();
+    SDL20_LockAudio();
+    already_opened = audio_cbdata && audio_cbdata->app_callback_opened;
+    SDL20_UnlockAudio();
+    if (already_opened) {
+        return SDL20_SetError("Audio device already opened");
     }
-    data->app_callback = want->callback;
-    data->app_userdata = want->userdata;
-    want->callback = AudioCallbackWrapper;
-    want->userdata = data;
-    /* to avoid receiving a possible incompatible configuration
-     * from SDL2, always pass NULL as the 'obtained' pointer.  */
+
     FIXME("Respect 1.2 environment variables for defining format here.");
     if (!want->format) {
         want->format = AUDIO_S16SYS;
@@ -5548,52 +7137,124 @@ SDL_OpenAudio(SDL_AudioSpec *want, SDL_AudioSpec *obtained)
         while (pow2 < samp) pow2 <<= 1;
         want->samples = pow2;
     }
-    retval = SDL20_OpenAudio(want, NULL);
-    want->callback = data->app_callback;
-    want->userdata = data->app_userdata;
-    if (retval < 0) {
-        SDL20_free(data);
-    } else {
-        data->silence = want->silence;
-        SDL_assert(audio_cbdata==NULL);
-        audio_cbdata = data;
-        if (obtained) {
-            SDL20_memcpy(obtained, want, sizeof (SDL_AudioSpec));
-        }
+
+    /* the app always passes callback data through an SDL_AudioStream, since it
+       has to share with the fake CD-ROM support. This also avoids the risk of
+       getting an incompatible device configuration from SDL2. As such,
+       the app always gets the format it requests. */
+    if (!OpenSDL2AudioDevice(want)) {
+        return -1;
     }
 
+    /* Device is locked now, unconditionally. Set up some things. */
+
+    if (obtained) {  /* the app always gets the format it requests */
+        SDL20_memcpy(obtained, want, sizeof (SDL_AudioSpec));
+    }
+
+    SDL20_memcpy(&audio_cbdata->app_callback_format, want, sizeof (SDL_AudioSpec));
+    audio_cbdata->app_callback_opened = SDL_TRUE;
+    SDL20_AtomicSet(&audio_callback_paused, SDL_TRUE);  /* app callback always starts paused after open. */
+
+    FIXME("Cleanup from failures in here");
+    SDL_assert(audio_cbdata->app_callback_stream == NULL);
+
+    if (!ResetAudioStream(&audio_cbdata->app_callback_stream, &audio_cbdata->app_callback_format, &audio_cbdata->device_format, want->format, want->channels, want->freq)) {
+        FIXME("Close audio device if nothing else was using it");
+        return -1;
+    }
+
+    SDL20_UnlockAudio();  /* we're off and going. */
+
+    return 0;
+}
+
+DECLSPEC void SDLCALL
+SDL_PauseAudio(int pause_on)
+{
+    SDL20_AtomicSet(&audio_callback_paused, pause_on ? SDL_TRUE : SDL_FALSE);
+}
+
+DECLSPEC SDL_AudioStatus SDLCALL
+SDL_GetAudioStatus(void)
+{
+    SDL_AudioStatus retval = SDL_AUDIO_STOPPED;
+    SDL20_LockAudio();
+    if (audio_cbdata && audio_cbdata->app_callback_opened) {
+        retval = SDL20_AtomicGet(&audio_callback_paused) ? SDL_AUDIO_PAUSED : SDL_AUDIO_PLAYING;
+    }
+    SDL20_UnlockAudio();
     return retval;
 }
 
 DECLSPEC void SDLCALL
 SDL_CloseAudio(void)
 {
-    SDL20_CloseAudio();
-    SDL20_free(audio_cbdata);
-    audio_cbdata = NULL;
+    SDL20_LockAudio();
+    if (audio_cbdata) {
+        audio_cbdata->app_callback_opened = SDL_FALSE;
+        SDL20_FreeAudioStream(audio_cbdata->app_callback_stream);
+        audio_cbdata->app_callback_stream = NULL;
+    }
+    SDL20_UnlockAudio();
+
+    CloseSDL2AudioDevice();
 }
 
 
-/* !!! FIXME: these are just stubs for now, but Sam thinks that maybe these
-were added at Loki for Heavy Gear 2's UI. They just make GL calls. */
-DECLSPEC void SDLCALL
-SDL_GL_Lock(void)
+static SDL_AudioCVT *
+AudioCVT12to20(const SDL12_AudioCVT *cvt12, SDL_AudioCVT *cvt20)
 {
-    FIXME("write me");
+    SDL_zerop(cvt20);
+    cvt20->needed = cvt12->needed;
+    cvt20->src_format = cvt12->src_format;
+    cvt20->dst_format = cvt12->dst_format;
+    cvt20->rate_incr = cvt12->rate_incr;
+    cvt20->buf = cvt12->buf;
+    cvt20->len = cvt12->len;
+    cvt20->len_cvt = cvt12->len_cvt;
+    cvt20->len_mult = cvt12->len_mult;
+    cvt20->len_ratio = cvt12->len_ratio;
+    SDL20_memcpy(cvt20->filters, cvt12->filters, sizeof (cvt12->filters));
+    cvt20->filter_index = cvt12->filter_index;
+    return cvt20;
 }
 
-DECLSPEC void SDLCALL
-SDL_GL_UpdateRects(int numrects, SDL12_Rect *rects)
+static SDL12_AudioCVT *
+AudioCVT20to12(const SDL_AudioCVT *cvt20, SDL12_AudioCVT *cvt12)
 {
-    (void) numrects;
-    (void) rects;
-    FIXME("write me");
+    SDL_zerop(cvt12);
+    cvt12->needed = cvt20->needed;
+    cvt12->src_format = cvt20->src_format;
+    cvt12->dst_format = cvt20->dst_format;
+    cvt12->rate_incr = cvt20->rate_incr;
+    cvt12->buf = cvt20->buf;
+    cvt12->len = cvt20->len;
+    cvt12->len_cvt = cvt20->len_cvt;
+    cvt12->len_mult = cvt20->len_mult;
+    cvt12->len_ratio = cvt20->len_ratio;
+    SDL20_memcpy(cvt12->filters, cvt20->filters, sizeof (cvt20->filters));
+    cvt12->filter_index = cvt20->filter_index;
+    return cvt12;
 }
 
-DECLSPEC void SDLCALL
-SDL_GL_Unlock(void)
+DECLSPEC int SDLCALL
+SDL_BuildAudioCVT(SDL12_AudioCVT *cvt12, Uint16 src_format, Uint8 src_channels, int src_rate, Uint16 dst_format, Uint8 dst_channels, int dst_rate)
 {
-    FIXME("write me");
+    SDL_AudioCVT cvt20;
+    const int retval = SDL20_BuildAudioCVT(&cvt20, src_format, src_channels, src_rate, dst_format, dst_channels, dst_rate);
+    AudioCVT20to12(&cvt20, cvt12);  /* SDL 1.2 derefences cvt12 without checking for NULL */
+    return retval;
+}
+
+DECLSPEC int SDLCALL
+SDL_ConvertAudio(SDL12_AudioCVT *cvt12)
+{
+    /* neither SDL 1.2 nor 2.0 makes sure cvt12 isn't NULL here.  :/  */
+    SDL_AudioCVT cvt20;
+    const int retval = SDL20_ConvertAudio(AudioCVT12to20(cvt12, &cvt20));
+    AudioCVT20to12(&cvt20, cvt12);
+    return retval;
 }
 
 

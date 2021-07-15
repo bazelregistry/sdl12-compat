@@ -40,14 +40,14 @@ real SDL-1.2 available to you. */
 
 #       include "begin_code.h"
 
-        typedef struct SDL_SysWMmsg
+        struct SDL_SysWMmsg
         {
             SDL_version version;
             HWND hwnd;
             UINT msg;
             WPARAM wParam;
             LPARAM lParam;
-        } SDL_SysWMmsg;
+        };
 
         typedef struct SDL_SysWMinfo {
             SDL_version version;
@@ -57,16 +57,9 @@ real SDL-1.2 available to you. */
 
 #       include "close_code.h"
 
-#   elif defined(unix)  /* shrug */
-
-#       ifdef __APPLE__
-#           define Cursor X11Cursor
-#       endif
+#   elif defined(SDL_VIDEO_DRIVER_X11)
 #       include <X11/Xlib.h>
 #       include <X11/Xatom.h>
-#       ifdef __APPLE__
-#           undef Cursor
-#       endif
 
 #       include "begin_code.h"
 
@@ -75,14 +68,14 @@ real SDL-1.2 available to you. */
             SDL_SYSWM_X11
         } SDL_SYSWM_TYPE;
 
-        typedef struct SDL_SysWMmsg
+        struct SDL_SysWMmsg
         {
             SDL_version version;
             SDL_SYSWM_TYPE subsystem;
             union {
                 XEvent xevent;
             } event;
-        } SDL_SysWMmsg;
+        };
 
         typedef struct SDL_SysWMinfo
         {
@@ -102,15 +95,16 @@ real SDL-1.2 available to you. */
         } SDL_SysWMinfo;
 
 #       include "close_code.h"
+
 #   else
 
 #       include "begin_code.h"
 
-        typedef struct SDL_SysWMmsg
+        struct SDL_SysWMmsg
         {
             SDL_version version;
             int data;
-        } SDL_SysWMmsg;
+        };
 
         typedef struct SDL_SysWMinfo
         {
