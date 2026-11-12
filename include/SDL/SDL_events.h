@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2021 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -185,11 +185,12 @@ typedef struct SDL_UserEvent
     void *data2;
 } SDL_UserEvent;
 
+struct SDL_SysWMmsg;
 typedef struct SDL_SysWMmsg SDL_SysWMmsg;
 typedef struct SDL_SysWMEvent
 {
     Uint8 type;
-    SDL_SysWMmsg *msg;
+    struct SDL_SysWMmsg *msg;
 } SDL_SysWMEvent;
 
 typedef union SDL_Event

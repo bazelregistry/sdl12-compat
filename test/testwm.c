@@ -5,7 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TEST_SYSWM 0
+
 #include "SDL.h"
+
+#ifdef TEST_SYSWM
+#include "SDL_syswm.h"
+#endif
 
 /* Is the cursor visible? */
 static int visible = 1;
@@ -60,7 +66,7 @@ int SetVideoMode(int w, int h)
 	return(0);
 }
 
-SDL_Surface *LoadIconSurface(char *file, Uint8 **maskp)
+SDL_Surface *LoadIconSurface(const char *file, Uint8 **maskp)
 {
 	SDL_Surface *icon;
 	Uint8       *pixels;
@@ -318,6 +324,18 @@ int SDLCALL FilterEvents(const SDL_Event *event)
 			printf("Quit demanded\n");
 			return(1);
 
+		case SDL_SYSWMEVENT:
+			#ifdef TEST_SYSWM
+			#ifdef _WIN32
+			printf("Windows syswm event: hwnd=%X msg=%X wparam=%X lparam=%X\n", (unsigned int) (size_t) event->syswm.msg->hwnd, (unsigned int) (size_t) event->syswm.msg->msg, (unsigned int) (size_t) event->syswm.msg->wParam, (unsigned int) (size_t) event->syswm.msg->lParam);
+			#elif defined(SDL_VIDEO_DRIVER_X11)
+			printf("X11 syswm event: %d\n", event->syswm.msg->event.xevent.type);
+			#else
+			printf("Generic syswm event: data=%d\n", event->syswm.msg->data);
+			#endif
+			#endif
+			return(1);
+
 		/* This will never happen because events queued directly
 		   to the event queue are not filtered.
 		 */
@@ -329,6 +347,8 @@ int SDLCALL FilterEvents(const SDL_Event *event)
 			return(0);
 	}
 }
+
+static char testtitle[] = "Testing  1.. 2.. 3...";
 
 int main(int argc, char *argv[])
 {
@@ -396,7 +416,7 @@ int main(int argc, char *argv[])
 
 	/* Set the title bar */
 	if ( argv[1] == NULL )
-		title = "Testing  1.. 2.. 3...";
+		title = testtitle;
 	else
 		title = argv[1];
 	SDL_WM_SetCaption(title, "testwm");
@@ -412,6 +432,44 @@ int main(int argc, char *argv[])
 	if ( SetVideoMode(w, h) < 0 ) {
 		quit(1);
 	}
+
+#ifdef TEST_SYSWM
+	{
+		SDL_SysWMinfo syswm_info;
+		SDL_VERSION(&syswm_info.version);
+		if (SDL_GetWMInfo(&syswm_info) != 1) {
+			printf("Failed to get syswm info: %s\n", SDL_GetError());
+		} else {
+			#ifdef _WIN32
+			printf("Windows syswm info: hwnd=%X hglrc=%X\n",
+			        (unsigned int) (size_t) syswm_info.window,
+			        (unsigned int) (size_t) syswm_info.hglrc);
+			#elif defined(SDL_VIDEO_DRIVER_X11)
+			printf("X11 syswm info: display=%p window=%X lock_func=%p unlock_func=%p fswindow=%X wmwindow=%X gfxdisplay=%p\n",
+			        syswm_info.info.x11.display,
+			        (unsigned int) (size_t) syswm_info.info.x11.window,
+			        syswm_info.info.x11.lock_func,
+			        syswm_info.info.x11.unlock_func,
+			        (unsigned int) (size_t) syswm_info.info.x11.fswindow,
+			        (unsigned int) (size_t) syswm_info.info.x11.wmwindow,
+			        syswm_info.info.x11.gfxdisplay);
+			#else
+			printf("Generic syswm info: data=%X\n", syswm_info.data);
+			#endif
+		}
+	}
+
+	{
+		typedef SDL_Window* (SDLCALL *fnSDL12COMPAT_GetWindow)(void);
+		fnSDL12COMPAT_GetWindow pfnSDL12COMPAT_GetWindow = (fnSDL12COMPAT_GetWindow) SDL_GL_GetProcAddress("SDL12COMPAT_GetWindow");
+		printf("SDL12COMPAT_GetWindow address is %p%s\n", pfnSDL12COMPAT_GetWindow, pfnSDL12COMPAT_GetWindow ? "" : " (probably using classic SDL 1.2)");
+		if (pfnSDL12COMPAT_GetWindow != NULL) {
+			printf("SDL 2.0 window: %p\n", pfnSDL12COMPAT_GetWindow());
+		}
+	}
+
+	SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
+#endif
 
 	/* Set an event filter that discards everything but QUIT */
 	SDL_SetEventFilter(FilterEvents);

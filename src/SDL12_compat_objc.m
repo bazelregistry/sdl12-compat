@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2021 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -21,10 +21,7 @@
 
 /* This file contains some macOS-specific support code */
 
-#define __BUILDING_SDL12_COMPAT__ 1
-#include "SDL.h"
-
-#ifdef __MACOSX__
+#ifdef __APPLE__
 #include <Cocoa/Cocoa.h>
 
 #if __GNUC__ >= 4
@@ -49,6 +46,8 @@ SDL12_PRIVATE void sdl12_compat_macos_init(void)
 
 SDL12_PRIVATE void error_dialog(const char *errorMsg)
 {
+    NSAlert *alert;
+
     if (NSApp == nil) {
         ProcessSerialNumber psn = { 0, kCurrentProcess };
         TransformProcessType(&psn, kProcessTransformToForegroundApplication);
@@ -58,11 +57,25 @@ SDL12_PRIVATE void error_dialog(const char *errorMsg)
     }
 
     [NSApp activateIgnoringOtherApps:YES];
-    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    alert = [[[NSAlert alloc] init] autorelease];
     alert.alertStyle = NSAlertStyleCritical;
     alert.messageText = @"Fatal error! Cannot continue!";
     alert.informativeText = [NSString stringWithCString:errorMsg encoding:NSASCIIStringEncoding];
     [alert runModal];
+}
+
+SDL12_PRIVATE void SDL12COMPAT_NSLog(const char *prefix, const char *text)
+{
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init]; {
+        NSString *nsText = [NSString stringWithUTF8String:text];
+        if (prefix && *prefix) {
+            NSString *nsPrefix = [NSString stringWithUTF8String:prefix];
+            NSLog(@"%@%@", nsPrefix, nsText);
+        } else {
+            NSLog(@"%@", nsText);
+        }
+    }
+    [pool drain];
 }
 #endif
 

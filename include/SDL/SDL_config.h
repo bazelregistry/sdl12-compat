@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2021 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -54,12 +54,13 @@ typedef unsigned __int64 uint64_t;
 #include <stdarg.h>
 #define HAVE_STDARG_H 1
 
+#define HAVE_STDDEF_H 1
+
 /* for now, let's try and say everything that we care about that isn't Windows
 has these C runtime functions available. We're trying to avoid a configure
 stage, though. Send patches if your platform lacks something. */
 #ifndef _WIN32
 #define HAVE_LIBC 1
-#define HAVE_ALLOCA_H 1
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_STDIO_H 1
 #define STDC_HEADERS 1
@@ -72,7 +73,11 @@ stage, though. Send patches if your platform lacks something. */
 #define HAVE_MATH_H 1
 #endif
 
-#if defined(unix) || defined(__APPLE__)
+#if defined(__linux__) || defined(__sun)
+#define HAVE_ALLOCA_H 1
+#endif
+
+#if defined(__unix__) || defined(__APPLE__)
 #define HAVE_ICONV_H 1
 #define HAVE_SIGNAL_H 1
 #endif
@@ -124,13 +129,16 @@ stage, though. Send patches if your platform lacks something. */
 #endif
 #endif
 
+#if defined(__GLIBC__)
+/* glibc certainly includes this, send patches if your OS does too */
+#define HAVE_MALLOC_H 1
+#endif
+
 /* things that aren't necessarily in Linux, some are MSVC C runtime, some are BSD. Send patches. */
 #if 0
-#define HAVE_MALLOC_H 1
 #define HAVE_BCOPY 1
 #define HAVE_ATOI 1
 #define HAVE_ATOF 1
-#define HAVE_STRLCPY 1
 #define HAVE_STRLCAT 1
 #define HAVE__STRREV 1
 #define HAVE__STRUPR 1
@@ -139,7 +147,6 @@ stage, though. Send patches if your platform lacks something. */
 #define HAVE_RINDEX 1
 #define HAVE_ITOA 1
 #define HAVE__LTOA 1
-#define HAVE__UITOA 1
 #define HAVE__ULTOA 1
 #define HAVE__I64TOA 1
 #define HAVE__UI64TOA 1
@@ -156,13 +163,24 @@ stage, though. Send patches if your platform lacks something. */
 #define HAVE_SEM_TIMEDWAIT 1
 #endif
 
-#if defined(unix) || defined(__APPLE__)
+#if defined(__unix__) || defined(__APPLE__)
 #define HAVE_ICONV 1
 #define HAVE_SIGACTION 1
 #define HAVE_SA_SIGACTION 1
 #define HAVE_SETJMP 1
 #endif
 
-/* Don't define any of the SDL backend, under the assumption checking for these against the headers won't work anyhow. */
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)  /* macos and BSDs have this. */
+#define HAVE_STRLCPY 1
+#endif
+
+/* Don't define most of the SDL backends, under the assumption checking for these against the headers won't work anyhow.
+   The exception is the X11 backend; you need its define to know if you can use its syswm interface. */
+
+#   if defined(__unix__) && !defined(__APPLE__) && defined(__has_include)
+#       if __has_include(<X11/Xlib.h>)
+#           define SDL_VIDEO_DRIVER_X11 1
+#       endif
+#   endif
 
 #endif /* _SDL_config_h */

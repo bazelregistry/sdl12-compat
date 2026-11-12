@@ -20,6 +20,7 @@ SDL_Rect *velocities;
 int sprites_visible;
 int debug_flip;
 Uint16 sprite_w, sprite_h;
+int refresh_rate = SDL_REFRESH_DEFAULT;
 
 /* Call this instead of exit(), so we can clean up SDL: atexit() is evil. */
 static void quit(int rc)
@@ -28,7 +29,7 @@ static void quit(int rc)
 	exit(rc);
 }
 
-int LoadSprite(char *file)
+int LoadSprite(const char *file)
 {
 	SDL_Surface *temp;
 
@@ -97,7 +98,7 @@ void MoveSprites(SDL_Surface *screen, Uint32 background)
 
 			Uint32 color = SDL_MapRGB (screen->format, 255, 0, 0);
 			SDL_Rect r;
-			r.x = (sin((float)t * 2 * 3.1459) + 1.0) / 2.0 * (screen->w-20);
+			r.x = (Sint16) ((sin((float)t * 2 * 3.1459) + 1.0) / 2.0 * (screen->w-20));
 			r.y = 0;
 			r.w = 20;
 			r.h = screen->h;
@@ -137,7 +138,7 @@ Uint32 FastestFlags(Uint32 flags, int width, int height, int bpp)
 		/* Direct hardware blitting without double-buffering
 		   causes really bad flickering.
 		 */
-		if ( info->video_mem*1024 > (height*width*bpp/8) ) {
+		if ( info->video_mem*1024 > ((Uint32)(height*width*bpp/8)) ) {
 			flags |= SDL_DOUBLEBUF;
 		} else {
 			flags &= ~SDL_HWSURFACE;
@@ -182,6 +183,10 @@ int main(int argc, char *argv[])
 			height = atoi(argv[argc]);
 			--argc;
 		} else
+		if ( strcmp(argv[argc-1], "-refresh") == 0 ) {
+			refresh_rate = atoi(argv[argc]);
+			--argc;
+		} else
 		if ( strcmp(argv[argc-1], "-bpp") == 0 ) {
 			video_bpp = atoi(argv[argc]);
 			videoflags &= ~SDL_ANYFORMAT;
@@ -202,17 +207,21 @@ int main(int argc, char *argv[])
 		if ( strcmp(argv[argc], "-fullscreen") == 0 ) {
 			videoflags ^= SDL_FULLSCREEN;
 		} else
+		if ( strcmp(argv[argc], "-noframe") == 0 ) {
+			videoflags ^= SDL_NOFRAME;
+		} else
 		if ( isdigit(argv[argc][0]) ) {
 			numsprites = atoi(argv[argc]);
 		} else {
 			fprintf(stderr, 
-	"Usage: %s [-bpp N] [-hw] [-flip] [-fast] [-fullscreen] [numsprites]\n",
+	"Usage: %s [-bpp N] [-refresh N] [-hw] [-flip] [-fast] [-fullscreen] [numsprites]\n",
 								argv[0]);
 			quit(1);
 		}
 	}
 
 	/* Set video mode */
+	SDL_SetRefreshRate(refresh_rate);
 	screen = SDL_SetVideoMode(width, height, video_bpp, videoflags);
 	if ( ! screen ) {
 		fprintf(stderr, "Couldn't set %dx%d video mode: %s\n",
@@ -239,7 +248,7 @@ int main(int argc, char *argv[])
 	sprite_rects += numsprites;
 	sprite_w = sprite->w;
 	sprite_h = sprite->h;
-	srand(time(NULL));
+	srand((unsigned int) time(NULL));
 	for ( i=0; i<numsprites; ++i ) {
 		positions[i].x = rand()%(screen->w - sprite_w);
 		positions[i].y = rand()%(screen->h - sprite_h);

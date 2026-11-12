@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2021 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -46,7 +46,7 @@ SDL20_SYM_VARARGS(void,Log,(const char *fmt, ...))
 SDL20_SYM(int,Init,(Uint32 a),(a),return)
 SDL20_SYM(int,InitSubSystem,(Uint32 a),(a),return)
 SDL20_SYM(Uint32,WasInit,(Uint32 a),(a),return)
-SDL20_SYM(char*,GetError,(void),(),return)
+SDL20_SYM(const char*,GetError,(void),(),return)
 SDL20_SYM_VARARGS(int,SetError,(const char *fmt, ...))
 
 SDL20_SYM(const char *,GetHint,(const char *a),(a),return)
@@ -70,16 +70,22 @@ SDL20_SYM(void,PumpEvents,(void),(),)
 SDL20_SYM(void,SetEventFilter,(SDL_EventFilter a, void *b),(a,b),)
 SDL20_SYM(void,AddEventWatch,(SDL_EventFilter a, void *b),(a,b),)
 SDL20_SYM(void,DelEventWatch,(SDL_EventFilter a, void *b),(a,b),)
+SDL20_SYM(Uint8,EventState,(Uint32 a, int b),(a,b),return)
 
+SDL20_SYM(SDL_bool,GetWindowWMInfo,(SDL_Window *a, SDL_SysWMinfo *b),(a,b),)
+
+SDL20_SYM(int,GetNumVideoDisplays,(void),(),return)
 SDL20_SYM(int,GetNumDisplayModes,(int a),(a),return)
 SDL20_SYM(int,GetDisplayMode,(int a, int b, SDL_DisplayMode *c),(a,b,c),return)
 SDL20_SYM(int,GetDesktopDisplayMode,(int a, SDL_DisplayMode *b),(a,b),return)
 SDL20_SYM(int,GetCurrentDisplayMode,(int a, SDL_DisplayMode *b),(a,b),return)
-
-SDL20_SYM(void,EnableScreenSaver,(void),(),)
-SDL20_SYM(void,DisableScreenSaver,(void),(),)
+SDL20_SYM(int,GetWindowDisplayMode,(SDL_Window *a, SDL_DisplayMode *b),(a,b),return)
+SDL20_SYM(SDL_DisplayMode *,GetClosestDisplayMode,(int a, const SDL_DisplayMode *b, SDL_DisplayMode *c),(a,b,c),return)
+SDL20_SYM(int,GetWindowDisplayIndex,(SDL_Window *a),(a),return)
+SDL20_SYM(int,SetWindowDisplayMode,(SDL_Window *a, const SDL_DisplayMode *b),(a,b),return)
 
 SDL20_SYM(SDL_Window *,CreateWindow,(const char *a, int b, int c, int d, int e, Uint32 f),(a,b,c,d,e,f),return)
+SDL20_SYM(SDL_Window *,CreateWindowFrom,(const void *a),(a),return)
 SDL20_SYM(void,DestroyWindow,(SDL_Window *a),(a),)
 SDL20_SYM(void,SetWindowIcon,(SDL_Window *a,SDL_Surface *b),(a,b),)
 SDL20_SYM(int,UpdateWindowSurface,(SDL_Window *a),(a),return)
@@ -108,9 +114,8 @@ SDL20_SYM(SDL_Surface *,ConvertSurface,(SDL_Surface *a, const SDL_PixelFormat *b
 SDL20_SYM(int,LockSurface,(SDL_Surface *a),(a),return)
 SDL20_SYM(void,UnlockSurface,(SDL_Surface *a),(a),)
 SDL20_SYM(int,UpperBlit,(SDL_Surface *a,const SDL_Rect *b,SDL_Surface *c, SDL_Rect *d),(a,b,c,d),return)
-SDL20_SYM(int,LowerBlit,(SDL_Surface *a,const SDL_Rect *b,SDL_Surface *c, SDL_Rect *d),(a,b,c,d),return)
+SDL20_SYM(int,LowerBlit,(SDL_Surface *a,SDL_Rect *b,SDL_Surface *c, SDL_Rect *d),(a,b,c,d),return)
 SDL20_SYM(int,SoftStretch,(SDL_Surface *a,const SDL_Rect *b,SDL_Surface *c,const SDL_Rect *d),(a,b,c,d),return)
-SDL20_SYM(SDL_bool,HasColorKey,(SDL_Surface *a),(a),return)
 SDL20_SYM(int,SetColorKey,(SDL_Surface *a, int b, Uint32 c),(a,b,c),return)
 SDL20_SYM(int,GetColorKey,(SDL_Surface *a, Uint32 *b),(a,b),return)
 SDL20_SYM(void,FreeSurface,(SDL_Surface *a),(a),)
@@ -131,6 +136,7 @@ SDL20_SYM(int,GL_GetAttribute,(SDL_GLattr a, int *b),(a,b),return)
 SDL20_SYM(int,GL_SetSwapInterval,(int a),(a),return)
 SDL20_SYM(int,GL_GetSwapInterval,(void),(),return)
 SDL20_SYM(SDL_GLContext,GL_CreateContext,(SDL_Window *a),(a),return)
+SDL20_SYM(SDL_GLContext,GL_GetCurrentContext,(void),(),return)
 SDL20_SYM(int,GL_MakeCurrent,(SDL_Window *a, SDL_GLContext b),(a,b),return)
 SDL20_SYM(void,GL_SwapWindow,(SDL_Window *a),(a),)
 SDL20_SYM(void,GL_DeleteContext,(SDL_GLContext a),(a),)
@@ -188,17 +194,29 @@ SDL20_SYM_PASSTHROUGH(int,CondBroadcast,(SDL_cond *a),(a),return)
 SDL20_SYM_PASSTHROUGH(int,CondWait,(SDL_cond *a, SDL_mutex *b),(a,b),return)
 SDL20_SYM_PASSTHROUGH(int,CondWaitTimeout,(SDL_cond *a, SDL_mutex *b, Uint32 c),(a,b,c),return)
 
+SDL20_SYM(int,AtomicGet,(SDL_atomic_t *a),(a),return)
+SDL20_SYM(int,AtomicSet,(SDL_atomic_t *a, int b),(a,b),return)
+SDL20_SYM(int,AtomicAdd,(SDL_atomic_t *a, int b),(a,b),return)
+
 SDL20_SYM(SDL_AudioSpec *,LoadWAV_RW,(SDL_RWops *a, int b, SDL_AudioSpec *c, Uint8 **d, Uint32 *e),(a,b,c,d,e),return)
 SDL20_SYM(int,OpenAudio,(SDL_AudioSpec *a, SDL_AudioSpec *b),(a,b),return)
 SDL20_SYM(void,CloseAudio,(void),(),)
-SDL20_SYM_PASSTHROUGH(SDL_AudioStatus,GetAudioStatus,(void),(),return)
-SDL20_SYM_PASSTHROUGH(void,PauseAudio,(int a),(a),)
+SDL20_SYM(SDL_AudioStatus,GetAudioStatus,(void),(),return)
+SDL20_SYM(void,PauseAudio,(int a),(a),)
 SDL20_SYM_PASSTHROUGH(void,FreeWAV,(Uint8 *a),(a),)
-SDL20_SYM_PASSTHROUGH(int,BuildAudioCVT,(SDL_AudioCVT *a, Uint16 b, Uint8 c, int d, Uint16 e, Uint8 f, int g),(a,b,c,d,e,f,g),return)
-SDL20_SYM_PASSTHROUGH(int,ConvertAudio,(SDL_AudioCVT *a),(a),return)
-SDL20_SYM_PASSTHROUGH(void,MixAudio,(Uint8 *a, const Uint8 *b, Uint32 c, int d),(a,b,c,d),)
+SDL20_SYM(int,BuildAudioCVT,(SDL_AudioCVT *a, Uint16 b, Uint8 c, int d, Uint16 e, Uint8 f, int g),(a,b,c,d,e,f,g),return)
+SDL20_SYM(int,ConvertAudio,(SDL_AudioCVT *a),(a),return)
+SDL20_SYM(void,MixAudioFormat,(Uint8 *a, const Uint8 *b, SDL_AudioFormat c, Uint32 d, int e),(a,b,c,d,e),)
 SDL20_SYM_PASSTHROUGH(void,LockAudio,(void),(),)
 SDL20_SYM_PASSTHROUGH(void,UnlockAudio,(void),(),)
+
+SDL20_SYM(SDL_AudioStream *,NewAudioStream,(const SDL_AudioFormat a, const Uint8 b, const int c, const SDL_AudioFormat d, const Uint8 e, const int f),(a,b,c,d,e,f),return)
+SDL20_SYM(int,AudioStreamPut,(SDL_AudioStream *a, const void *b, int c),(a,b,c),return)
+SDL20_SYM(int,AudioStreamGet,(SDL_AudioStream *a, void *b, int c),(a,b,c),return)
+SDL20_SYM(int,AudioStreamAvailable,(SDL_AudioStream *a),(a),return)
+SDL20_SYM(int,AudioStreamFlush,(SDL_AudioStream *a),(a),return)
+SDL20_SYM(void,AudioStreamClear,(SDL_AudioStream *a),(a),)
+SDL20_SYM(void,FreeAudioStream,(SDL_AudioStream *a),(a),)
 
 SDL20_SYM_PASSTHROUGH(void*,LoadObject,(const char *a),(a),return)
 SDL20_SYM_PASSTHROUGH(void*,LoadFunction,(void *a, const char *b),(a,b),return)
@@ -214,40 +232,53 @@ SDL20_SYM_PASSTHROUGH(SDL_bool,HasAltiVec,(void),(),return)
 SDL20_SYM(SDL_TimerID,AddTimer,(Uint32 a, SDL_TimerCallback b, void *c),(a,b,c),return)
 SDL20_SYM(SDL_bool,RemoveTimer,(SDL_TimerID a),(a),return)
 SDL20_SYM_PASSTHROUGH(Uint32,GetTicks,(void),(),return)
-SDL20_SYM_PASSTHROUGH(void,Delay,(Uint32 a),(a),)
+SDL20_SYM(void,Delay,(Uint32 a),(a),)
 
-SDL20_SYM_PASSTHROUGH(int,NumJoysticks,(void),(),return)
+SDL20_SYM(SDL_bool,IsGameController,(int a),(a),return)
+SDL20_SYM(const char *,GameControllerNameForIndex,(int a),(a),return)
+SDL20_SYM(SDL_GameController *,GameControllerOpen,(int a),(a),return)
+SDL20_SYM(void,GameControllerClose,(SDL_GameController *a),(a),)
+SDL20_SYM(int,GameControllerEventState,(int a),(a),return)
+SDL20_SYM(void,GameControllerUpdate,(void),(),)
+SDL20_SYM(Sint16,GameControllerGetAxis,(SDL_GameController *a, int b),(a,b),return)  /* SDL_GameControllerAxis b   */
+SDL20_SYM(Uint8,GameControllerGetButton,(SDL_GameController *a, int b),(a,b),return) /* SDL_GameControllerButton b */
+
+SDL20_SYM(int,NumJoysticks,(void),(),return)
 SDL20_SYM(const char *,JoystickNameForIndex,(int a),(a),return)
+SDL20_SYM(SDL_JoystickID,JoystickGetDeviceInstanceID,(int a),(a),return)
 SDL20_SYM(SDL_Joystick *,JoystickOpen,(int a),(a),return)
-SDL20_SYM_PASSTHROUGH(int,JoystickNumAxes,(SDL_Joystick *a),(a),return)
-SDL20_SYM_PASSTHROUGH(int,JoystickNumBalls,(SDL_Joystick *a),(a),return)
-SDL20_SYM_PASSTHROUGH(int,JoystickNumHats,(SDL_Joystick *a),(a),return)
-SDL20_SYM_PASSTHROUGH(int,JoystickNumButtons,(SDL_Joystick *a),(a),return)
-SDL20_SYM_PASSTHROUGH(void,JoystickUpdate,(void),(),)
-SDL20_SYM_PASSTHROUGH(int,JoystickEventState,(int a),(a),return)
-SDL20_SYM_PASSTHROUGH(Sint16,JoystickGetAxis,(SDL_Joystick *a, int b),(a,b),return)
-SDL20_SYM_PASSTHROUGH(Uint8,JoystickGetHat,(SDL_Joystick *a, int b),(a,b),return)
-SDL20_SYM_PASSTHROUGH(int,JoystickGetBall,(SDL_Joystick *a, int b, int *c, int *d),(a,b,c,d),return)
-SDL20_SYM_PASSTHROUGH(Uint8,JoystickGetButton,(SDL_Joystick *a, int b),(a,b),return)
+SDL20_SYM(int,JoystickNumAxes,(SDL_Joystick *a),(a),return)
+SDL20_SYM(int,JoystickNumBalls,(SDL_Joystick *a),(a),return)
+SDL20_SYM(int,JoystickNumHats,(SDL_Joystick *a),(a),return)
+SDL20_SYM(int,JoystickNumButtons,(SDL_Joystick *a),(a),return)
+SDL20_SYM(void,JoystickUpdate,(void),(),)
+SDL20_SYM(int,JoystickEventState,(int a),(a),return)
+SDL20_SYM(Sint16,JoystickGetAxis,(SDL_Joystick *a, int b),(a,b),return)
+SDL20_SYM(Uint8,JoystickGetHat,(SDL_Joystick *a, int b),(a,b),return)
+SDL20_SYM(int,JoystickGetBall,(SDL_Joystick *a, int b, int *c, int *d),(a,b,c,d),return)
+SDL20_SYM(Uint8,JoystickGetButton,(SDL_Joystick *a, int b),(a,b),return)
 SDL20_SYM(void,JoystickClose,(SDL_Joystick *a),(a),return)
 SDL20_SYM(void,LockJoysticks,(void),(),)
 SDL20_SYM(void,UnlockJoysticks,(void),(),)
 
 SDL20_SYM(SDL_RWops *,RWFromFile,(const char *a, const char *b),(a,b),return)
-SDL20_SYM(SDL_RWops *,RWFromFP,(void *a, int b),(a,b),return) /* FILE* */
+SDL20_SYM(SDL_RWops *,RWFromFP,(void *a, SDL_bool b),(a,b),return) /* FILE* */
 SDL20_SYM(SDL_RWops *,RWFromMem,(void *a, int b),(a,b),return)
 SDL20_SYM(SDL_RWops *,RWFromConstMem,(const void *a, int b),(a,b),return)
 SDL20_SYM(SDL_RWops *,AllocRW,(void),(),return)
 SDL20_SYM(void,FreeRW,(SDL_RWops *a),(a),)
+SDL20_SYM(void *,LoadFile_RW,(SDL_RWops *a, size_t *b, int c),(a,b,c),return)
 
 SDL20_SYM_PASSTHROUGH(void *,malloc,(size_t a),(a),return)
 SDL20_SYM_PASSTHROUGH(void *,calloc,(size_t a, size_t b),(a,b),return)
 SDL20_SYM_PASSTHROUGH(void *,realloc,(void *a, size_t b),(a,b),return)
 SDL20_SYM_PASSTHROUGH(void,free,(void *a),(a),)
-SDL20_SYM_PASSTHROUGH(char *,getenv,(const char *a),(a),return)
-SDL20_SYM_PASSTHROUGH(void,qsort,(void *a, size_t b, size_t c, int (*d)(const void *, const void *)),(a,b,c,d),)
+SDL20_SYM_PASSTHROUGH(void,qsort,(void *a, size_t b, size_t c, int (SDLCALL *d)(const void *, const void *)),(a,b,c,d),)
 SDL20_SYM_PASSTHROUGH(void *,memset,(void *a, int b, size_t c),(a,b,c),return)
 SDL20_SYM_PASSTHROUGH(void *,memcpy,(void *a, const void *b, size_t c),(a,b,c),return)
+SDL20_SYM(void *,memmove,(void *a, const void *b, size_t c),(a,b,c),return)
+SDL20_SYM(double,atof,(const char *a),(a),return)
+
 SDL20_SYM_PASSTHROUGH(int,memcmp,(const void *a, const void *b, size_t c),(a,b,c),return)
 SDL20_SYM_PASSTHROUGH(size_t,strlen,(const char *a),(a),return)
 SDL20_SYM_PASSTHROUGH(size_t,strlcpy,(char *a, const char *b, size_t c),(a,b,c),return)
@@ -281,23 +312,20 @@ SDL20_SYM_PASSTHROUGH(int,iconv_close,(SDL_iconv_t a),(a),return)
 SDL20_SYM_PASSTHROUGH(size_t,iconv,(SDL_iconv_t a, const char **b, size_t *c, char **d, size_t *e),(a,b,c,d,e),return)
 SDL20_SYM_PASSTHROUGH(char *,iconv_string,(const char *a, const char *b, const char *c, size_t d),(a,b,c,d),return)
 SDL20_SYM(int,setenv,(const char *a, const char *b, int c),(a,b,c),return)
-SDL20_SYM(int,atoi,(const char *a),(a),return)
-#ifdef __WATCOMC__ /* Watcom builds are broken with SDL math functions. */
-#ifndef SDL12_MATH
-#include <math.h>
-#define SDL20_fabsf fabs
-#define SDL20_floorf floor
-#define SDL12_MATH
-#endif
-#else
-SDL20_SYM(float,fabsf,(float a),(a),return)
-SDL20_SYM(float,floorf,(float a),(a),return)
-#endif
+SDL20_SYM(long,lroundf,(float a),(a),return)
 
+SDL20_SYM(double,fabs,(double a),(a),return)
+SDL20_SYM(double,ceil,(double a),(a),return)
+SDL20_SYM(double,floor,(double a),(a),return)
+
+SDL20_SYM(int,GetRenderDriverInfo,(int a, SDL_RendererInfo *b),(a,b),return)
 SDL20_SYM(SDL_Renderer *,CreateRenderer,(SDL_Window *a, int b, Uint32 c),(a,b,c),return)
 SDL20_SYM(int,GetRendererInfo,(SDL_Renderer *a, SDL_RendererInfo *b),(a,b),return)
+SDL20_SYM(void,RenderGetScale,(SDL_Renderer *a, float *b, float *c),(a,b,c),return)
+SDL20_SYM(void,RenderGetViewport,(SDL_Renderer *a, SDL_Rect *b),(a,b),return)
 SDL20_SYM(SDL_Texture *,CreateTexture,(SDL_Renderer *a, Uint32 b, int c, int d, int e),(a,b,c,d,e),return)
 SDL20_SYM(int,LockTexture,(SDL_Texture *a, const SDL_Rect *b, void **c, int *d),(a,b,c,d),return)
+SDL20_SYM(int,LockTextureToSurface,(SDL_Texture *a, const SDL_Rect *b, SDL_Surface **c),(a,b,c),return)
 SDL20_SYM(void,UnlockTexture,(SDL_Texture *a),(a),)
 SDL20_SYM(int,UpdateTexture,(SDL_Texture *a, const SDL_Rect *b, const void *c, int d),(a,b,c,d),return)
 SDL20_SYM(int,UpdateYUVTexture,(SDL_Texture *a, const SDL_Rect *b, const Uint8 *c, int d, const Uint8 *e, int f, const Uint8 *g, int h),(a,b,c,d,e,f,g,h),return)
@@ -308,6 +336,13 @@ SDL20_SYM(int,RenderCopy,(SDL_Renderer *a, SDL_Texture *b, const SDL_Rect *c, co
 SDL20_SYM(void,DestroyTexture,(SDL_Texture *a),(a),)
 SDL20_SYM(void,DestroyRenderer,(SDL_Renderer *a),(a),)
 SDL20_SYM(void,RenderPresent,(SDL_Renderer *a),(a),)
+
+SDL20_SYM(SDL_bool,SetHintWithPriority,(const char *a, const char *b, SDL_HintPriority c),(a,b,c),return)
+
+#ifdef _WIN32
+SDL20_SYM_PASSTHROUGH(int,RegisterApp,(const char *a, Uint32 b, void *c),(a,b,c),return)
+SDL20_SYM_PASSTHROUGH(void,UnregisterApp,(void),(),)
+#endif
 
 /* These are optional OpenGL entry points for sdl12-compat's internal use. */
 OPENGL_SYM(Core,const GLubyte *,glGetString,(GLenum a),(a),return)
@@ -329,6 +364,30 @@ OPENGL_SYM(Core,void,glCopyTexImage2D,(GLenum a, GLint b, GLenum c, GLint d, GLi
 OPENGL_SYM(Core,void,glCopyTexSubImage2D,(GLenum a, GLint b, GLint c, GLint d, GLint e, GLint f, GLsizei g, GLsizei h),(a,b,c,d,e,f,g,h),)
 OPENGL_SYM(Core,void,glCopyTexSubImage3D,(GLenum a, GLint b, GLint c, GLint d, GLint e, GLint f, GLsizei g, GLsizei h, GLint i),(a,b,c,d,e,f,g,h,i),)
 
+OPENGL_SYM(Core,void,glDeleteTextures,(GLsizei a, const GLuint *b),(a,b),)
+OPENGL_SYM(Core,void,glGenTextures,(GLsizei a, GLuint *b),(a,b),)
+OPENGL_SYM(Core,void,glPopAttrib,(),(),)
+OPENGL_SYM(Core,void,glPopClientAttrib,(),(),)
+OPENGL_SYM(Core,void,glPopMatrix,(),(),)
+OPENGL_SYM(Core,void,glBegin,(GLenum a),(a),)
+OPENGL_SYM(Core,void,glPushAttrib,(GLbitfield a),(a),)
+OPENGL_SYM(Core,void,glPushClientAttrib,(GLbitfield a),(a),)
+OPENGL_SYM(Core,void,glBindTexture,(GLenum a, GLuint b),(a,b),)
+OPENGL_SYM(Core,void,glEnd,(),(),)
+OPENGL_SYM(Core,void,glTexEnvf,(GLenum a, GLenum b, GLfloat c),(a,b,c),)
+OPENGL_SYM(Core,void,glTexParameteri,(GLenum a, GLenum b, GLint c),(a,b,c),)
+OPENGL_SYM(Core,void,glPixelStorei,(GLenum a, GLint b),(a,b),)
+OPENGL_SYM(Core,void,glBlendFunc,(GLenum a, GLenum b),(a,b),)
+OPENGL_SYM(Core,void,glColor4f,(GLfloat a, GLfloat b, GLfloat c, GLfloat d),(a,b,c,d),)
+OPENGL_SYM(Core,void,glMatrixMode,(GLenum a),(a),)
+OPENGL_SYM(Core,void,glLoadIdentity,(),(),)
+OPENGL_SYM(Core,void,glPushMatrix,(),(),)
+OPENGL_SYM(Core,void,glOrtho,(GLdouble a, GLdouble b, GLdouble c, GLdouble d, GLdouble e, GLdouble f),(a,b,c,d,e,f),)
+OPENGL_SYM(Core,void,glTexImage2D,(GLenum a, GLint b, GLint c, GLsizei d, GLsizei e, GLint f, GLenum g, GLenum h, const GLvoid *i),(a,b,c,d,e,f,g,h,i),)
+OPENGL_SYM(Core,void,glTexSubImage2D,(GLenum a, GLint b, GLint c, GLint d, GLsizei e, GLsizei f, GLenum g, GLenum h, const GLvoid *i),(a,b,c,d,e,f,g,h,i),)
+OPENGL_SYM(Core,void,glVertex2i,(GLint a, GLint b),(a,b),)
+OPENGL_SYM(Core,void,glTexCoord2f,(GLfloat a, GLfloat b),(a,b),)
+
 OPENGL_EXT(GL_ARB_framebuffer_object)
 OPENGL_SYM(GL_ARB_framebuffer_object,void,glBindRenderbuffer,(GLenum a, GLuint b),(a,b),)
 OPENGL_SYM(GL_ARB_framebuffer_object,void,glDeleteRenderbuffers,(GLsizei a, const GLuint *b),(a,b),)
@@ -344,6 +403,8 @@ OPENGL_SYM(GL_ARB_framebuffer_object,GLenum,glCheckFramebufferStatus,(GLenum a),
 OPENGL_SYM(GL_ARB_framebuffer_object,void,glFramebufferRenderbuffer,(GLenum a, GLenum b, GLenum c, GLuint d),(a,b,c,d),)
 OPENGL_SYM(GL_ARB_framebuffer_object,void,glBlitFramebuffer,(GLint a, GLint b, GLint c, GLint d, GLint e, GLint f, GLint g, GLint h, GLbitfield i, GLenum j),(a,b,c,d,e,f,g,h,i,j),)
 
+OPENGL_EXT(GL_ARB_texture_non_power_of_two)
+
 #undef SDL20_SYM
 #undef SDL20_SYM_PASSTHROUGH
 #undef SDL20_SYM_VARARGS
@@ -351,4 +412,3 @@ OPENGL_SYM(GL_ARB_framebuffer_object,void,glBlitFramebuffer,(GLint a, GLint b, G
 #undef OPENGL_EXT
 
 /* vi: set ts=4 sw=4 expandtab: */
-

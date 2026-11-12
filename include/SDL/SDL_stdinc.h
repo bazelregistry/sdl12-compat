@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2021 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -83,10 +83,9 @@ SDL_COMPILE_TIME_ASSERT(enum, sizeof(SDL_DUMMY_ENUM) == sizeof(int));
 #ifdef HAVE_STDIO_H
 #include <stdio.h>
 #endif
-#ifdef HAVE_STDLIB_H
+#if defined(HAVE_STDLIB_H)
 #include <stdlib.h>
-#endif
-#ifdef HAVE_MALLOC_H
+#elif defined(HAVE_MALLOC_H)
 #include <malloc.h>
 #endif
 #ifdef HAVE_STDDEF_H
@@ -101,10 +100,9 @@ SDL_COMPILE_TIME_ASSERT(enum, sizeof(SDL_DUMMY_ENUM) == sizeof(int));
 #ifdef HAVE_STRINGS_H
 #include <strings.h>
 #endif
-#ifdef HAVE_INTTYPES_H
+#if defined(HAVE_INTTYPES_H)
 #include <inttypes.h>
-#endif
-#ifdef HAVE_STDINT_H
+#elif defined(HAVE_STDINT_H)
 #include <stdint.h>
 #endif
 #ifdef HAVE_CTYPE_H
@@ -342,7 +340,7 @@ extern DECLSPEC int SDLCALL SDL_strcasecmp(const char *str1, const char *str2);
 #ifdef HAVE_STRNCASECMP
 #define SDL_strncasecmp strncasecmp
 #elif defined(HAVE__STRNICMP)
-#define SDL_strcasecmp _strnicmp
+#define SDL_strncasecmp _strnicmp
 #else
 extern DECLSPEC int SDLCALL SDL_strncasecmp(const char *str1, const char *str2, size_t maxlen);
 #endif
@@ -410,7 +408,7 @@ extern DECLSPEC int SDLCALL SDL_vsnprintf(char *text, size_t maxlen, const char 
 
 #define SDL_itoa(value, string, radix) SDL_ltoa((long)value, string, radix)
 #define SDL_uitoa(value, string, radix) SDL_ultoa((long)value, string, radix)
-#define SDL_atoi(X)     SDL_strtol(X, NULL, 0)
+#define SDL_atoi(X)     SDL_strtol(X, NULL, 10)
 #define SDL_atof(X)     SDL_strtod(X, NULL)
 
 #define SDL_ICONV_ERROR (size_t)-1

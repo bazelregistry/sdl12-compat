@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2021 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -89,7 +89,7 @@ typedef struct SDL_Surface
     Uint16 pitch;
     void *pixels;
     int offset;
-    void *hwdata;
+    struct private_hwdata *hwdata;
     SDL_Rect clip_rect;
     Uint32 unused1;
     Uint32 locked;
@@ -221,6 +221,10 @@ extern DECLSPEC int SDLCALL SDL_WM_IconifyWindow(void);
 extern DECLSPEC int SDLCALL SDL_WM_ToggleFullScreen(SDL_Surface *surface);
 extern DECLSPEC SDL_GrabMode SDLCALL SDL_WM_GrabInput(SDL_GrabMode mode);
 extern DECLSPEC int SDLCALL SDL_SoftStretch(SDL_Surface *src, SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect);
+
+/* this was never in an real SDL-1.2 release, but apparently StepMania was maintaining a fork with this API for literally years. */
+#define SDL_REFRESH_DEFAULT 0
+extern DECLSPEC void SDLCALL SDL_SetRefreshRate(int rate);
 
 #define SDL_SWSURFACE 0x00000000
 #define SDL_HWSURFACE 0x00000001

@@ -5,19 +5,22 @@
 INCLUDES = -Iinclude
 
 ifeq ($(CROSS),)
-CC=gcc
-RC=windres
+CC = gcc
+RC = windres
 else
-CC=$(CROSS)-gcc
-RC=$(CROSS)-windres
+CC = $(CROSS)-gcc
+RC = $(CROSS)-windres
 endif
 LD = $(CC)
 
 CPPFLAGS = -DDLL_EXPORT -DNDEBUG
+CPPFLAGS+= -DSDL_DISABLE_IMMINTRIN_H
 
 CFLAGS  = -O3 -Wall
 LDFLAGS = -nostdlib -shared -Wl,--no-undefined -Wl,--enable-auto-image-base -Wl,--out-implib,$(LIB)
 LDLIBS  = -lkernel32 -luser32
+# libgcc is needed for 32 bit (x86) builds:
+LDLIBS += -static-libgcc -lgcc
 
 LIB = libSDL.dll.a
 DLL = SDL.dll

@@ -193,6 +193,7 @@
 ++'_SDL_GetVideoInfo'.'SDL.dll'.'SDL_GetVideoInfo'.'SDL_GetVideoInfo'
 ++'_SDL_ListModes'.'SDL.dll'.'SDL_ListModes'.'SDL_ListModes'
 ++'_SDL_VideoModeOK'.'SDL.dll'.'SDL_VideoModeOK'.'SDL_VideoModeOK'
+++'_SDL_SetRefreshRate'.'SDL.dll'.'SDL_SetRefreshRate'.'SDL_SetRefreshRate'
 ++'_SDL_SetVideoMode'.'SDL.dll'.'SDL_SetVideoMode'.'SDL_SetVideoMode'
 ++'_SDL_DisplayFormat'.'SDL.dll'.'SDL_DisplayFormat'.'SDL_DisplayFormat'
 ++'_SDL_DisplayFormatAlpha'.'SDL.dll'.'SDL_DisplayFormatAlpha'.'SDL_DisplayFormatAlpha'
@@ -234,3 +235,4 @@
 ++'_SDL_HasSSE'.'SDL.dll'.'SDL_HasSSE'.'SDL_HasSSE'
 ++'_SDL_HasSSE2'.'SDL.dll'.'SDL_HasSSE2'.'SDL_HasSSE2'
 ++'_SDL_HasAltiVec'.'SDL.dll'.'SDL_HasAltiVec'.'SDL_HasAltiVec'
+++'_SDL12COMPAT_GetWindow'.'SDL.dll'.'SDL12COMPAT_GetWindow'.'SDL12COMPAT_GetWindow'
